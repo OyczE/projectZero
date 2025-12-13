@@ -43,6 +43,10 @@ done
 build_native() {
   cd "$APP_DIR"
   export IDF_TARGET=esp32c5
+  if [ -f /opt/esp/idf/export.sh ]; then
+    # shellcheck disable=SC1091
+    . /opt/esp/idf/export.sh >/dev/null 2>&1
+  fi
   idf.py build
 }
 
@@ -59,4 +63,4 @@ docker run --rm \
   --volume "${APP_DIR}:/project" \
   --volume "${CACHE_DIR}:/root/.espressif" \
   "$IMAGE" \
-  bash -c "idf.py build"
+  bash -c ". /opt/esp/idf/export.sh >/dev/null 2>&1 && idf.py build"
