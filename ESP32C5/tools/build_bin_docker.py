@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Build ESP32C5 firmware inside the official ESP-IDF docker image.
+Build ESP32C5 firmware inside the official ESP-IDF docker image without
+brudzenia drzewa roboczego. Tworzy tymczasową kopię repo, buduje w kontenerze,
+po czym kopiuje artefakty do ESP32C5/tools/docker_bin_output.
 
 Usage:
     python ESP32C5/tools/build_bin_docker.py [--image espressif/idf:v6.0-dev]
-
-The script mounts the repo into the container and runs the same
-container_build.sh used in CI (with --no-docker so it stays inside).
-Resulting binaries land in ESP32C5/binaries-esp32c5.
 """
 
 import argparse
+import tempfile
 import os
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -36,8 +36,27 @@ def main() -> int:
         print(f"Missing build script: {workflow_script}", file=sys.stderr)
         return 1
 
-    # Docker wants POSIX-style paths for the mount; assume Linux host.
-    mount_src = repo_root.as_posix()
+    tmpdir = Path(tempfile.mkdtemp(prefix="projectzero-build-"))
+    workspace = tmpdir / "src"
+    print(f"Creating temporary workspace at {workspace}")
+
+    try:
+        shutil.copytree(
+            repo_root,
+            workspace,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(
+                ".git",
+                "__pycache__",
+                "ESP32C5/build",
+                "ESP32C5/managed_components",
+                "ESP32C5/binaries-esp32c5",
+            ),
+        )
+    except Exception as exc:
+        print(f"Failed to prepare workspace: {exc}", file=sys.stderr)
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return 1
 
     cmd = [
         "docker",
@@ -45,7 +64,7 @@ def main() -> int:
         "--rm",
         "-it",
         "-v",
-        f"{mount_src}:/project",
+        f"{workspace.as_posix()}:/project",
         "-w",
         "/project",
         "-e",
@@ -62,12 +81,34 @@ def main() -> int:
         subprocess.run(cmd, check=True)
     except FileNotFoundError:
         print("docker not found. Please install Docker and ensure it's on PATH.", file=sys.stderr)
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return 1
     except subprocess.CalledProcessError as exc:
+        shutil.rmtree(tmpdir, ignore_errors=True)
         return exc.returncode
 
-    binaries = repo_root / "ESP32C5" / "binaries-esp32c5"
-    print(f"\nBuild finished. Binaries (bin/elf) should be in: {binaries}")
+    # Copy artifacts back to a stable location in the repo
+    src_bins = workspace / "ESP32C5" / "binaries-esp32c5"
+    dest_bins = repo_root / "ESP32C5" / "tools" / "docker_bin_output"
+    dest_bins.mkdir(parents=True, exist_ok=True)
+    copied = []
+    if src_bins.is_dir():
+        for item in src_bins.iterdir():
+            if item.is_file():
+                shutil.copy2(item, dest_bins / item.name)
+                copied.append(item.name)
+
+    shutil.rmtree(tmpdir, ignore_errors=True)
+
+    print("\nBuild finished.")
+    if copied:
+        print(f"Copied artifacts to: {dest_bins}")
+        print("Files:")
+        for name in copied:
+            print(f"  - {name}")
+    else:
+        print("No artifacts were found to copy.")
+
     return 0
 
 
