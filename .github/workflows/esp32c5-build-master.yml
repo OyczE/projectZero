@@ -43,8 +43,8 @@ jobs:
           if not m:
               raise SystemExit("JANOS_VERSION not found")
           print(m.group(1))
-PY
-)
+          PY
+          )
           src="ESP32C5/binaries-esp32c5/projectZero.bin"
           dst="ESP32C5/binaries-esp32c5/projectZero-${version}.bin"
           if [ ! -f "$src" ]; then
