@@ -66,16 +66,16 @@ jobs:
         id: bundle
         run: |
           set -e
-          out="ESP32C5/binaries-esp32c5/projectZero-${{ steps.version.outputs.version }}.zip"
-          rm -f "$out"
           cd ESP32C5/binaries-esp32c5
+          out="projectZero-${{ steps.version.outputs.version }}.zip"
+          rm -f "$out"
           zip -9 "$out" \
             bootloader.bin \
             partition-table.bin \
             flash_board.py \
             oui_wifi.bin \
             "projectZero-${{ steps.version.outputs.version }}.bin"
-          echo "bundle_zip=$out" >> "$GITHUB_OUTPUT"
+          echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

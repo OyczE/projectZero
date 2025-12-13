@@ -52,8 +52,8 @@ def main() -> int:
         "IDF_PY_FLAGS=--preview",
         args.image,
         "bash",
-        "-c",
-        ".github/scripts/container_build.sh --no-docker",
+        "-lc",
+        "bash .github/scripts/container_build.sh --no-docker",
     ]
 
     print("Running build inside docker:")
