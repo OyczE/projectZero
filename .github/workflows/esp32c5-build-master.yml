@@ -154,12 +154,13 @@ jobs:
           name: esp32c5-firmware
           path: release_artifacts/firmware
 
-      - name: Download FAP artifacts
+      - name: Download FAP artifacts (if present)
         uses: actions/download-artifact@v4
         with:
           name: flipper-fap
           path: release_artifacts/fap
-          if-no-files-found: ignore
+          merge-multiple: true
+        continue-on-error: true
 
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
