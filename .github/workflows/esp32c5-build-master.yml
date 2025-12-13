@@ -15,7 +15,7 @@ jobs:
   build:
     runs-on: ubuntu-24.04
     container:
-      image: espressif/idf:release-v6.0
+      image: espressif/idf:v6.0-dev
     steps:
       - name: Checkout
         uses: actions/checkout@v4
