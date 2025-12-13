@@ -1,0 +1,60 @@
+name: ESP32C5 Build
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'ESP32C5/**'
+      - '.github/scripts/**'
+      - '.github/workflows/esp32c5-build.yml'
+  release:
+    types: [published, edited]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:release-v6.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Cache ESP-IDF artifacts
+        uses: actions/cache@v4
+        with:
+          path: /root/.espressif
+          key: espidf-6.0-${{ runner.os }}-${{ hashFiles('ESP32C5/sdkconfig', 'ESP32C5/dependencies.lock') }}
+          restore-keys: |
+            espidf-6.0-${{ runner.os }}-
+            espidf-6.0-
+
+      - name: Build firmware (esp-idf 6.0)
+        run: bash .github/scripts/container_build.sh --no-docker
+
+      - name: Stamp firmware with JANOS_VERSION
+        run: |
+          version=$(python - <<'PY'
+from pathlib import Path
+import re
+text = Path("ESP32C5/main/main.c").read_text()
+m = re.search(r'JANOS_VERSION\s*"([^"]+)"', text)
+if not m:
+    raise SystemExit("JANOS_VERSION not found")
+print(m.group(1))
+PY
+)
+          src="ESP32C5/binaries-esp32c5/projectZero.bin"
+          dst="ESP32C5/binaries-esp32c5/projectZero-${version}.bin"
+          if [ ! -f "$src" ]; then
+            echo "Missing firmware: $src" >&2
+            exit 1
+          fi
+          cp "$src" "$dst"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32c5-firmware-${{ github.run_number }}
+          path: ESP32C5/binaries-esp32c5
+          if-no-files-found: error

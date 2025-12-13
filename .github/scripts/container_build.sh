@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+IMAGE="${IDF_DOCKER_IMAGE:-espressif/idf:release-v6.0}"
+USE_DOCKER="${USE_DOCKER:-1}"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+APP_DIR="${REPO_ROOT}/ESP32C5"
+CACHE_DIR="${IDF_CACHE_DIR:-${REPO_ROOT}/.espressif}"
+
+usage() {
+  cat <<'EOF'
+Usage: container_build.sh [--no-docker]
+
+Builds ESP32C5 firmware using esp-idf release/v6.0.
+Defaults to running inside Docker (espressif/idf:release-v6.0).
+
+Options:
+  --no-docker   Run idf.py directly (for GitHub Actions container job or host with esp-idf installed)
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --no-docker)
+      USE_DOCKER=0
+      shift
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      usage
+      exit 1
+      ;;
+  esac
+done
+
+build_native() {
+  cd "$APP_DIR"
+  export IDF_TARGET=esp32c5
+  idf.py build
+}
+
+if [[ "$USE_DOCKER" == "0" || "$USE_DOCKER" == "false" ]]; then
+  build_native
+  exit 0
+fi
+
+mkdir -p "$CACHE_DIR"
+
+docker run --rm \
+  --workdir /project \
+  --env IDF_TARGET=esp32c5 \
+  --volume "${APP_DIR}:/project" \
+  --volume "${CACHE_DIR}:/root/.espressif" \
+  "$IMAGE" \
+  bash -c "idf.py build"
