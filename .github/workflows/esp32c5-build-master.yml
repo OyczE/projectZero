@@ -2,11 +2,15 @@ name: ESP32C5 Build (IDF 6.0-dev)
 
 on:
   workflow_dispatch:
-  push:
-    branches: [master]
-    paths:
-      - 'ESP32C5/main/main.c'
-      - '.github/scripts/**'
+    inputs:
+      release_tag:
+        description: "Optional tag name to upload assets to a release (only used when manually dispatched)"
+        required: false
+      push:
+        branches: [master]
+        paths:
+          - 'ESP32C5/main/main.c'
+          - '.github/scripts/**'
       - '.github/workflows/esp32c5-build-master.yml'
   release:
     types: [published, edited]
@@ -66,9 +70,10 @@ jobs:
           if-no-files-found: error
 
       - name: Upload binaries to GitHub Release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event.release.tag_name || inputs.release_tag }}
           files: |
             ESP32C5/binaries-esp32c5/*
         env:
