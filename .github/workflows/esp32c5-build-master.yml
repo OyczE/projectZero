@@ -13,6 +13,8 @@ on:
 
 jobs:
   build:
+    permissions:
+      contents: write  # required for uploading assets to a GitHub Release
     runs-on: ubuntu-24.04
     container:
       image: espressif/idf:v6.0-dev
@@ -33,6 +35,7 @@ jobs:
         run: IDF_PY_FLAGS="--preview" bash .github/scripts/container_build.sh --no-docker
 
       - name: Stamp firmware with JANOS_VERSION
+        id: version
         run: |
           set -e
           version=$(python - <<'PY'
@@ -52,6 +55,8 @@ jobs:
             exit 1
           fi
           cp "$src" "$dst"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "release_asset=${dst}" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -59,3 +64,12 @@ jobs:
           name: esp32c5-firmware-master-${{ github.run_number }}
           path: ESP32C5/binaries-esp32c5
           if-no-files-found: error
+
+      - name: Upload binaries to GitHub Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            ESP32C5/binaries-esp32c5/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
