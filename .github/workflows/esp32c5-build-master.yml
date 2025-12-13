@@ -78,6 +78,20 @@ jobs:
             projectZero.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
+      - name: Download Flipper SDKs
+        run: |
+          set -e
+          mkdir -p FLIPPER/sdk
+          cd FLIPPER/sdk
+          [ -f flipper-z-f7-sdk-unlshd-083.zip ] || curl -L -o flipper-z-f7-sdk-unlshd-083.zip https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-083/flipper-z-f7-sdk-unlshd-083.zip
+          [ -f flipper-z-f7-sdk-mntm-011.zip ] || curl -L -o flipper-z-f7-sdk-mntm-011.zip https://github.com/Next-Flip/Momentum-Firmware/releases/download/mntm-011/flipper-z-f7-sdk-mntm-011.zip
+
+      - name: Build Flipper FAP (if SDK zips present)
+        if: ${{ hashFiles('FLIPPER/sdk/*.zip') != '' }}
+        run: |
+          set -e
+          python FLIPPER/build_fap.py --no-upload
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -85,7 +99,15 @@ jobs:
           path: ESP32C5/binaries-esp32c5
           if-no-files-found: error
 
+      - name: Upload FAP artifacts
+        if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flipper-fap-master-${{ github.run_number }}
+          path: FLIPPER/dist/*.fap
+
       - name: Upload binaries to GitHub Release
+        if: github.ref == 'refs/heads/master' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', steps.version.outputs.version) }}
@@ -98,5 +120,16 @@ jobs:
             ESP32C5/binaries-esp32c5/projectZero.bin
             ${{ steps.version.outputs.release_asset }}
             ${{ steps.bundle.outputs.bundle_zip }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload FAPs to GitHub Release
+        if: (github.ref == 'refs/heads/master' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && hashFiles('FLIPPER/dist/*.fap') != ''
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', steps.version.outputs.version) }}
+          name: ${{ format('projectZero {0}', steps.version.outputs.version) }}
+          files: |
+            FLIPPER/dist/*.fap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
