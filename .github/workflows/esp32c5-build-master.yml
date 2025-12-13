@@ -4,24 +4,28 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional tag name to upload assets to a release (only used when manually dispatched, example 'v1.2.3')"
+        description: "Optional tag name to upload assets to a release (example 'v1.2.3')"
         required: false
   push:
     branches: [main, master]
     paths:
       - 'ESP32C5/main/main.c'
+      - 'FLIPPER/**'
       - '.github/scripts/**'
       - '.github/workflows/esp32c5-build-master.yml'
   release:
     types: [published, edited]
 
 jobs:
-  build:
+  firmware:
+    name: Firmware
     permissions:
-      contents: write  # required for uploading assets to a GitHub Release
+      contents: write
     runs-on: ubuntu-24.04
     container:
       image: espressif/idf:v6.0-dev
+    outputs:
+      fw_version: ${{ steps.version.outputs.version }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -78,10 +82,27 @@ jobs:
             projectZero.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32c5-firmware
+          path: ESP32C5/binaries-esp32c5
+          if-no-files-found: error
+
+  fap:
+    name: Flipper FAP
+    needs: firmware
+    runs-on: ubuntu-24.04
+    outputs:
+      fap_version: ${{ steps.fap_version.outputs.fap_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Install FAP build dependencies (ufbt in venv)
         run: |
           set -e
-          apt-get update && apt-get install -y python3-venv
+          sudo apt-get update && sudo apt-get install -y python3-venv
           python3 -m venv /tmp/ufbt-venv
           . /tmp/ufbt-venv/bin/activate
           pip install -U pip ufbt
@@ -95,15 +116,13 @@ jobs:
           [ -f flipper-z-f7-sdk-unlshd-083.zip ] || curl -L -o flipper-z-f7-sdk-unlshd-083.zip https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-083/flipper-z-f7-sdk-unlshd-083.zip
           [ -f flipper-z-f7-sdk-mntm-011.zip ] || curl -L -o flipper-z-f7-sdk-mntm-011.zip https://github.com/Next-Flip/Momentum-Firmware/releases/download/mntm-011/flipper-z-f7-sdk-mntm-011.zip
 
-      - name: Build Flipper FAP (if SDK zips present)
-        if: ${{ hashFiles('FLIPPER/sdk/*.zip') != '' }}
+      - name: Build Flipper FAP
         run: |
           set -e
           python FLIPPER/build_fap.py --no-upload
 
       - name: Read FAP version
         id: fap_version
-        if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
         run: |
           set -e
           python - <<'PY'
@@ -116,44 +135,45 @@ jobs:
           print(f"fap_version={m.group(1)}")
           PY
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: esp32c5-firmware-master-${{ github.run_number }}
-          path: ESP32C5/binaries-esp32c5
-          if-no-files-found: error
-
       - name: Upload FAP artifacts
         if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: flipper-fap-${{ github.run_number }}-v${{ steps.fap_version.outputs.fap_version || 'unknown' }}
+          name: flipper-fap
           path: FLIPPER/dist/*.fap
 
-      - name: Upload binaries to GitHub Release
-        if: github.ref == 'refs/heads/master' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
-        uses: softprops/action-gh-release@v2
+  release:
+    name: Release
+    needs: [firmware, fap]
+    runs-on: ubuntu-24.04
+    if: github.ref == 'refs/heads/master' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
+    steps:
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
         with:
-          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', steps.version.outputs.version) }}
-          name: ${{ format('projectZero {0}', steps.version.outputs.version) }}
-          files: |
-            ESP32C5/binaries-esp32c5/bootloader.bin
-            ESP32C5/binaries-esp32c5/partition-table.bin
-            ESP32C5/binaries-esp32c5/flash_board.py
-            ESP32C5/binaries-esp32c5/oui_wifi.bin
-            ESP32C5/binaries-esp32c5/projectZero.bin
-            ${{ steps.version.outputs.release_asset }}
-            ${{ steps.bundle.outputs.bundle_zip }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          name: esp32c5-firmware
+          path: release_artifacts/firmware
 
-      - name: Upload FAPs to GitHub Release
-        if: (github.ref == 'refs/heads/master' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')) && hashFiles('FLIPPER/dist/*.fap') != ''
+      - name: Download FAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flipper-fap
+          path: release_artifacts/fap
+          if-no-files-found: ignore
+
+      - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', steps.version.outputs.version) }}
-          name: ${{ format('projectZero {0}', steps.version.outputs.version) }}
+          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          name: ${{ format('projectZero {0}', needs.firmware.outputs.fw_version) }}
           files: |
-            FLIPPER/dist/*.fap
+            release_artifacts/firmware/bootloader.bin
+            release_artifacts/firmware/partition-table.bin
+            release_artifacts/firmware/flash_board.py
+            release_artifacts/firmware/oui_wifi.bin
+            release_artifacts/firmware/projectZero.bin
+            release_artifacts/firmware/projectZero-${{ needs.firmware.outputs.fw_version }}.bin
+            release_artifacts/firmware/projectZero-${{ needs.firmware.outputs.fw_version }}.zip
+            release_artifacts/fap/*.fap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
