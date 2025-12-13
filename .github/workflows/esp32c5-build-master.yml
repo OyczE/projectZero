@@ -6,11 +6,11 @@ on:
       release_tag:
         description: "Optional tag name to upload assets to a release (only used when manually dispatched)"
         required: false
-      push:
-        branches: [master]
-        paths:
-          - 'ESP32C5/main/main.c'
-          - '.github/scripts/**'
+  push:
+    branches: [master]
+    paths:
+      - 'ESP32C5/main/main.c'
+      - '.github/scripts/**'
       - '.github/workflows/esp32c5-build-master.yml'
   release:
     types: [published, edited]
