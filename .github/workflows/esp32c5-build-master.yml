@@ -62,6 +62,21 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "release_asset=${dst}" >> "$GITHUB_OUTPUT"
 
+      - name: Package release zip
+        id: bundle
+        run: |
+          set -e
+          out="ESP32C5/binaries-esp32c5/projectZero-${{ steps.version.outputs.version }}.zip"
+          rm -f "$out"
+          cd ESP32C5/binaries-esp32c5
+          zip -9 "$out" \
+            bootloader.bin \
+            partition-table.bin \
+            flash_board.py \
+            oui_wifi.bin \
+            "projectZero-${{ steps.version.outputs.version }}.bin"
+          echo "bundle_zip=$out" >> "$GITHUB_OUTPUT"
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -80,5 +95,6 @@ jobs:
             ESP32C5/binaries-esp32c5/flash_board.py
             ESP32C5/binaries-esp32c5/oui_wifi.bin
             ${{ steps.version.outputs.release_asset }}
+            ${{ steps.bundle.outputs.bundle_zip }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
