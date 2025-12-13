@@ -7,7 +7,7 @@ on:
         description: "Optional tag name to upload assets to a release (only used when manually dispatched, example 'v1.2.3')"
         required: false
   push:
-    branches: [master]
+    branches: [main, master]
     paths:
       - 'ESP32C5/main/main.c'
       - '.github/scripts/**'
