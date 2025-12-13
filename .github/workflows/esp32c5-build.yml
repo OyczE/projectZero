@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
     paths:
-      - 'ESP32C5/**'
+      - 'ESP32C5/main/main.c'
       - '.github/scripts/**'
       - '.github/workflows/esp32c5-build.yml'
   release:
