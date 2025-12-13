@@ -36,13 +36,13 @@ jobs:
         run: |
           set -e
           version=$(python - <<'PY'
-from pathlib import Path
-import re
-text = Path("ESP32C5/main/main.c").read_text()
-m = re.search(r'JANOS_VERSION\s*"([^"]+)"', text)
-if not m:
-    raise SystemExit("JANOS_VERSION not found")
-print(m.group(1))
+          from pathlib import Path
+          import re
+          text = Path("ESP32C5/main/main.c").read_text()
+          m = re.search(r'JANOS_VERSION\s*"([^"]+)"', text)
+          if not m:
+              raise SystemExit("JANOS_VERSION not found")
+          print(m.group(1))
 PY
 )
           src="ESP32C5/binaries-esp32c5/projectZero.bin"
