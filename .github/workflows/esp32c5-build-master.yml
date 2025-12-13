@@ -78,6 +78,12 @@ jobs:
             projectZero.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
+      - name: Install FAP build dependencies (pip/ufbt)
+        run: |
+          set -e
+          python -m ensurepip --upgrade || (apt-get update && apt-get install -y python3-pip)
+          python -m pip install -U pip ufbt
+
       - name: Download Flipper SDKs
         run: |
           set -e
@@ -92,6 +98,21 @@ jobs:
           set -e
           python FLIPPER/build_fap.py --no-upload
 
+      - name: Read FAP version
+        id: fap_version
+        if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
+        run: |
+          set -e
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("FLIPPER/Lab_C5.c").read_text(encoding="utf-8", errors="ignore")
+          m = re.search(r'#define\s+LAB_C5_VERSION_TEXT\s+"([^"]+)"', text)
+          if not m:
+            raise SystemExit("LAB_C5_VERSION_TEXT not found")
+          print(f"fap_version={m.group(1)}")
+          PY
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -103,7 +124,7 @@ jobs:
         if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
         uses: actions/upload-artifact@v4
         with:
-          name: flipper-fap-master-${{ github.run_number }}
+          name: flipper-fap-${{ github.run_number }}-v${{ steps.fap_version.outputs.fap_version || 'unknown' }}
           path: FLIPPER/dist/*.fap
 
       - name: Upload binaries to GitHub Release
