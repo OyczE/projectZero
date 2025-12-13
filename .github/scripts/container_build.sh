@@ -5,7 +5,8 @@ IMAGE="${IDF_DOCKER_IMAGE:-espressif/idf:release-v6.0}"
 USE_DOCKER="${USE_DOCKER:-1}"
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+# go two levels up: .github/scripts -> repo root
+REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 APP_DIR="${REPO_ROOT}/ESP32C5"
 CACHE_DIR="${IDF_CACHE_DIR:-${REPO_ROOT}/.espressif}"
 
