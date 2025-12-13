@@ -94,9 +94,12 @@ def main() -> int:
     copied = []
     if src_bins.is_dir():
         for item in src_bins.iterdir():
-            if item.is_file():
-                shutil.copy2(item, dest_bins / item.name)
-                copied.append(item.name)
+            if not item.is_file():
+                continue
+            if item.name.lower() == "readme.md":
+                continue  # skip local README file from being treated as an artifact
+            shutil.copy2(item, dest_bins / item.name)
+            copied.append(item.name)
 
     shutil.rmtree(tmpdir, ignore_errors=True)
 

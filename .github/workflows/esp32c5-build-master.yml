@@ -85,10 +85,10 @@ jobs:
           if-no-files-found: error
 
       - name: Upload binaries to GitHub Release
-        if: github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.release.tag_name || inputs.release_tag }}
+          tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', steps.version.outputs.version) }}
+          name: ${{ format('projectZero %s', steps.version.outputs.version) }}
           files: |
             ESP32C5/binaries-esp32c5/bootloader.bin
             ESP32C5/binaries-esp32c5/partition-table.bin
