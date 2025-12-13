@@ -103,6 +103,7 @@ We're regular tinkerers who got bored and decided to design the full stack ourse
 - Join the LAB Discord server to discuss ESP32-C5 builds and projectZero workflows: https://discord.gg/57wmJzzR8C
 
 ## Last Changes
+- 2025-12-13 - Autobuild ststem testing
 - 2025-12-04 FAP o.29 - fix evil twin exit and reopen FAP crash flipper
 - 2025-12-03 JanOS 0.7.6 / FAP 0.28 - Setup / Scan timing: add configurable min/max durations for scanning.
 - 2025-11-30 JanOS 0.7.5 / FAP 0.27 - Added Sniffer start with selected targets; Back stops and returns to Sniffers on Show Sniffer Results.
