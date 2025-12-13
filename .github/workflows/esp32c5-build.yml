@@ -30,7 +30,7 @@ jobs:
             espidf-6.0-
 
       - name: Build firmware (esp-idf 6.0)
-        run: bash .github/scripts/container_build.sh --no-docker
+        run: IDF_PY_FLAGS="--preview" bash .github/scripts/container_build.sh --no-docker
 
       - name: Stamp firmware with JANOS_VERSION
         run: |

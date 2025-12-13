@@ -47,7 +47,11 @@ build_native() {
     # shellcheck disable=SC1091
     . /opt/esp/idf/export.sh >/dev/null 2>&1
   fi
-  idf.py build
+  local extra_flags="${IDF_PY_FLAGS:-}"
+  if [[ "${IDF_TARGET}" == "esp32c5" && "${extra_flags}" != *"--preview"* ]]; then
+    extra_flags="--preview ${extra_flags}"
+  fi
+  idf.py ${extra_flags} build
 }
 
 if [[ "$USE_DOCKER" == "0" || "$USE_DOCKER" == "false" ]]; then
@@ -60,7 +64,11 @@ mkdir -p "$CACHE_DIR"
 docker run --rm \
   --workdir /project \
   --env IDF_TARGET=esp32c5 \
+  --env IDF_PY_FLAGS="${IDF_PY_FLAGS:-}" \
   --volume "${APP_DIR}:/project" \
   --volume "${CACHE_DIR}:/root/.espressif" \
   "$IMAGE" \
-  bash -c ". /opt/esp/idf/export.sh >/dev/null 2>&1 && idf.py build"
+  bash -c '. /opt/esp/idf/export.sh >/dev/null 2>&1; \
+           extra="${IDF_PY_FLAGS:-}"; \
+           [ "$IDF_TARGET" = "esp32c5" ] && case "$extra" in (*--preview*) ;; (*) extra="--preview $extra";; esac; \
+           idf.py $extra build'
