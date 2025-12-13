@@ -78,11 +78,14 @@ jobs:
             projectZero.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
-      - name: Install FAP build dependencies (pip/ufbt)
+      - name: Install FAP build dependencies (ufbt in venv)
         run: |
           set -e
-          python -m ensurepip --upgrade || (apt-get update && apt-get install -y python3-pip)
-          python -m pip install -U pip ufbt
+          apt-get update && apt-get install -y python3-venv
+          python3 -m venv /tmp/ufbt-venv
+          . /tmp/ufbt-venv/bin/activate
+          pip install -U pip ufbt
+          echo "/tmp/ufbt-venv/bin" >> $GITHUB_PATH
 
       - name: Download Flipper SDKs
         run: |
