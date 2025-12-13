@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional tag name to upload assets to a release (only used when manually dispatched)"
+        description: "Optional tag name to upload assets to a release (only used when manually dispatched, example 'v1.2.3')"
         required: false
   push:
     branches: [master]
@@ -75,6 +75,10 @@ jobs:
         with:
           tag_name: ${{ github.event.release.tag_name || inputs.release_tag }}
           files: |
-            ESP32C5/binaries-esp32c5/*
+            ESP32C5/binaries-esp32c5/bootloader.bin
+            ESP32C5/binaries-esp32c5/partition-table.bin
+            ESP32C5/binaries-esp32c5/flash_board.py
+            ESP32C5/binaries-esp32c5/oui_wifi.bin
+            ${{ steps.version.outputs.release_asset }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
