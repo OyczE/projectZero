@@ -74,7 +74,8 @@ jobs:
             partition-table.bin \
             flash_board.py \
             oui_wifi.bin \
-            "projectZero-${{ steps.version.outputs.version }}.bin"
+            "projectZero-${{ steps.version.outputs.version }}.bin" \
+            projectZero.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifacts
@@ -88,12 +89,13 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', steps.version.outputs.version) }}
-          name: ${{ format('projectZero %s', steps.version.outputs.version) }}
+          name: ${{ format('projectZero {0}', steps.version.outputs.version) }}
           files: |
             ESP32C5/binaries-esp32c5/bootloader.bin
             ESP32C5/binaries-esp32c5/partition-table.bin
             ESP32C5/binaries-esp32c5/flash_board.py
             ESP32C5/binaries-esp32c5/oui_wifi.bin
+            ESP32C5/binaries-esp32c5/projectZero.bin
             ${{ steps.version.outputs.release_asset }}
             ${{ steps.bundle.outputs.bundle_zip }}
         env:
