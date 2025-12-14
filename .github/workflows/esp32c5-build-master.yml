@@ -192,3 +192,22 @@ jobs:
             release_artifacts/fap/*.fap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+        run: |
+          set -e
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          payload=$(cat <<EOF
+{ "content": "Release ${RELEASE_TAG:-$FW_VERSION} published. Firmware: $FW_VERSION. FAP: ${FAP_VERSION:-n/a}." }
+EOF
+)
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
