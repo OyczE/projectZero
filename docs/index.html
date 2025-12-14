@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>projectZero Flash Station</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: radial-gradient(circle at 20% 20%, #0c1529, #060912 55%);
+      --panel: #0f1c33;
+      --accent: #6df0ff;
+      --accent-2: #ffd479;
+      --text: #e8f0ff;
+      --muted: #9bb3d1;
+      --border: rgba(255, 255, 255, 0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Space Grotesk", system-ui, -apple-system, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 32px 16px;
+    }
+    .wrap {
+      width: min(1100px, 100%);
+      display: grid;
+      gap: 16px;
+    }
+    header {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      background: linear-gradient(135deg, rgba(109, 240, 255, 0.06), rgba(255, 212, 121, 0.05));
+      border: 1px solid var(--border);
+      border-radius: 18px;
+      padding: 24px;
+    }
+    header h1 {
+      margin: 0;
+      font-size: clamp(32px, 4vw, 44px);
+      letter-spacing: -0.02em;
+    }
+    header p {
+      margin: 0;
+      max-width: 720px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 16px;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 18px;
+      box-shadow: 0 16px 48px rgba(0, 0, 0, 0.45);
+    }
+    .card h2 {
+      margin: 0 0 10px;
+      font-size: 18px;
+      letter-spacing: 0.01em;
+    }
+    .card p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.55;
+    }
+    .steps {
+      list-style: none;
+      margin: 12px 0 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+    .steps li {
+      background: rgba(255, 255, 255, 0.03);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 10px 12px;
+      line-height: 1.5;
+    }
+    .label {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      background: rgba(109, 240, 255, 0.12);
+      color: var(--accent);
+      font-size: 12px;
+      letter-spacing: 0.04em;
+    }
+    .flash-box {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .flash-text {
+      max-width: 540px;
+      color: var(--muted);
+      line-height: 1.5;
+    }
+    esp-web-install-button {
+      --install-button-color: var(--accent);
+      --install-button-background: rgba(109, 240, 255, 0.12);
+      --install-button-border: 1px solid rgba(109, 240, 255, 0.45);
+      --install-button-border-radius: 999px;
+      --install-button-padding: 14px 24px;
+      --install-button-font-size: 14px;
+      --install-button-font-family: "Space Grotesk", system-ui, sans-serif;
+      --install-button-hover-background: rgba(109, 240, 255, 0.2);
+      --install-button-hover-color: #0f1c33;
+    }
+    .status {
+      margin-top: 10px;
+      font-size: 14px;
+      color: var(--muted);
+    }
+    .pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.03);
+      font-size: 13px;
+      color: var(--muted);
+    }
+    .pill strong { color: var(--accent-2); }
+    .footer {
+      text-align: center;
+      color: var(--muted);
+      font-size: 13px;
+      padding-top: 8px;
+    }
+    @media (max-width: 720px) {
+      .flash-box { flex-direction: column; align-items: flex-start; }
+      body { padding: 20px 12px; }
+    }
+  </style>
+  <script type="module">
+    import "https://unpkg.com/esp-web-tools@9.0.0/dist/web/install-button.js";
+
+    async function loadManifest() {
+      const status = document.querySelector("[data-status]");
+      const pills = document.querySelector("[data-build]");
+      try {
+        const res = await fetch("manifest.json", { cache: "no-store" });
+        if (!res.ok) throw new Error("missing manifest");
+        const manifest = await res.json();
+        status.textContent = `Ready: ${manifest.name || "projectZero"} (${manifest.version || "unknown"})`;
+        pills.innerHTML = `
+          <span class="pill"><strong>Build</strong> ${manifest.build || "n/a"}</span>
+          <span class="pill"><strong>Version</strong> ${manifest.version || "n/a"}</span>
+          <span class="pill"><strong>Chip</strong> ${manifest.chipFamily || "ESP32-C5"}</span>
+        `;
+      } catch (err) {
+        status.textContent = "Manifest not found. Deploy a release first.";
+        pills.innerHTML = `<span class="pill"><strong>Status</strong> waiting for release assets</span>`;
+      }
+    }
+
+    loadManifest();
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <div class="label">projectZero • ESP32-C5</div>
+      <h1>Flash projectZero straight from your browser</h1>
+      <p>Use Web Serial to push the latest JanOS build onto the LAB C5 board. Bring the board in ROM mode (hold BOOT while plugging in), click install, and the flasher will stream the bootloader, partition table, and firmware in one go.</p>
+    </header>
+
+    <div class="card">
+      <div class="flash-box">
+        <div class="flash-text">
+          <h2>Install</h2>
+          <p>Chrome / Edge on desktop is required for Web Serial. The manifest and binaries are pulled from the latest GitHub Release automatically.</p>
+          <div class="status" data-status>Looking for manifest…</div>
+          <div data-build style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;"></div>
+        </div>
+        <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>How to flash</h2>
+        <ul class="steps">
+          <li>Hold BOOT on the LAB C5, plug the board in, then release.</li>
+          <li>Click <strong>Install</strong>, choose the C5 serial port, and keep the browser tab focused.</li>
+          <li>Wait for the progress bar to finish. The board will reset into JanOS.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>Quick checks</h2>
+        <ul class="steps">
+          <li>Use a data-capable cable and close apps that might lock the COM port (qFlipper, serial monitors).</li>
+          <li>If flashing stalls, unplug, rerun the installer, then re-connect the board while holding BOOT.</li>
+          <li>Try a lower flash frequency (40m) from the `flash_board.py` script if the device boot-loops.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h2>Offline fallback</h2>
+        <p>Releases also ship `flash_board.py` in the assets bundle. Run it from <code>ESP32C5/binaries-esp32c5</code> if your browser blocks Web Serial or you need to erase the flash first.</p>
+      </div>
+    </div>
+    <div class="footer">
+      This page updates automatically every time a release is published.
+    </div>
+  </div>
+</body>
+</html>
