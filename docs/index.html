@@ -353,7 +353,6 @@
       try {
         state.port = await navigator.serial.requestPort({});
         const baud = parseInt(ui.baud.value, 10);
-        await state.port.open({ baudRate: baud });
         state.transport = new Transport(state.port, true);
         const loaderOptions = {
           transport: state.transport,
