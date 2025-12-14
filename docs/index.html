@@ -211,7 +211,7 @@
 <body>
   <div class="container">
     <header>
-      <div class="eyebrow">projectZero • ESP32-C5</div>
+      <div class="eyebrow">projectZero - ESP32-C5</div>
       <h1>Flash projectZero straight from your browser</h1>
       <p>WebSerial flasher powered by esptool-js. Click Connect, pick the LAB C5 serial port (Chrome/Edge desktop), then Flash to stream bootloader, partition table, and firmware from the latest GitHub Release.</p>
     </header>
@@ -244,7 +244,7 @@
 
       <div class="card">
         <h2>Release info</h2>
-        <p id="releaseInfo">Loading manifest…</p>
+        <p id="releaseInfo">Loading manifest...</p>
         <div class="steps">
           <li><strong>ROM mode:</strong> Hold BOOT on the LAB C5, plug the board in, then release.</li>
           <li><strong>Close serial hogs:</strong> quit qFlipper/monitors or anything holding the COM port.</li>
@@ -265,7 +265,7 @@
       </div>
       <div class="card">
         <h2>Browser support</h2>
-        <p>Chrome or Edge on desktop over HTTPS. Web Serial is required. If you see “Web Serial not available”, switch browsers.</p>
+        <p>Chrome or Edge on desktop over HTTPS. Web Serial is required. If you see "Web Serial not available", switch browsers.</p>
       </div>
     </div>
   </div>
@@ -329,9 +329,9 @@
         const manifest = await res.json();
         state.manifest = manifest;
         ui.manifest.style.display = "inline-flex";
-        ui.manifest.textContent = `Build ${manifest.build || "n/a"} • ${manifest.version || "n/a"}`;
+        ui.manifest.textContent = `Build ${manifest.build || "n/a"} - ${manifest.version || "n/a"}`;
         const files = manifest.parts?.length || 0;
-        ui.releaseInfo.innerHTML = `<span class="badge">Manifest</span> ${manifest.name || "projectZero"} • ${files} file(s) • chip ${manifest.chipFamily || "ESP32-C5"}`;
+        ui.releaseInfo.innerHTML = `<span class="badge">Manifest</span> ${manifest.name || "projectZero"} - ${files} file(s) - chip ${manifest.chipFamily || "ESP32-C5"}`;
         setStatus("Manifest loaded.");
       } catch (err) {
         setStatus("Manifest not found. Publish a release first.", "error");
@@ -352,8 +352,8 @@
       ui.connectBtn.disabled = true;
       ui.flashBtn.disabled = true;
       ui.monitorBtn.disabled = true;
-      setStatus("Requesting serial port…");
-      log("Requesting port access…");
+      setStatus("Requesting serial port...");
+      log("Requesting port access...");
       try {
         state.port = await navigator.serial.requestPort({});
         const baud = parseInt(ui.baud.value, 10);
@@ -369,8 +369,8 @@
           debugLogging: false,
         };
         state.esploader = new ESPLoader(loaderOptions);
-        setStatus("Syncing with chip… (hold BOOT + RESET to enter ROM)");
-        log("Syncing with chip…");
+        setStatus("Syncing with chip... (hold BOOT + RESET to enter ROM)");
+        log("Syncing with chip...");
         state.chip = await state.esploader.main();
         ui.chip.style.display = "inline-flex";
         ui.chip.textContent = `Chip ${state.chip}`;
@@ -390,30 +390,38 @@
     };
 
     const resolveAssetUrl = async (url, fallbackName) => {
-      const ghMatch = url.match(/github\\.com\\/([^/]+)\\/([^/]+)/);
-      if (!ghMatch) return url;
+      const assetName = fallbackName || url.split("/").pop();
+      const ghMatch = url.match(/https?:\\/\\/github\\.com\\/([^/]+)\\/([^/]+)/);
+
+      // Non-GitHub URL: just fetch it
+      if (!ghMatch) {
+        const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+        if (!res.ok) throw new Error(`Fetch ${url} failed (${res.status} ${res.statusText})`);
+        return { buf: await res.arrayBuffer(), usedUrl: url };
+      }
+
       const owner = ghMatch[1];
       const repo = ghMatch[2];
 
-      // First try direct URL
+      // First try direct URL (latest/download/...)
       try {
         const res = await fetch(url, { cache: "no-store", redirect: "follow" });
         if (res.ok) return { buf: await res.arrayBuffer(), usedUrl: url };
         if (res.status !== 404) throw new Error(`${res.status} ${res.statusText}`);
-        log(`Primary URL 404, trying GitHub API for ${fallbackName}…`);
+        log(`Primary URL 404, trying GitHub API for ${assetName}...`);
       } catch (err) {
-        log(`Primary fetch failed (${err.message || err}), trying GitHub API…`);
+        log(`Primary fetch failed (${err.message || err}), trying GitHub API...`);
       }
 
       // Fallback: GitHub API releases/latest
       const apiUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
       const apiRes = await fetch(apiUrl, { cache: "no-store" });
-      if (!apiRes.ok) throw new Error(`GitHub API failed for ${fallbackName}: ${apiRes.status} ${apiRes.statusText}`);
+      if (!apiRes.ok) throw new Error(`GitHub API failed for ${assetName}: ${apiRes.status} ${apiRes.statusText}`);
       const release = await apiRes.json();
-      const asset = (release.assets || []).find((a) => a.name === fallbackName);
-      if (!asset) throw new Error(`Asset ${fallbackName} not found in latest release`);
+      const asset = (release.assets || []).find((a) => a.name === assetName);
+      if (!asset) throw new Error(`Asset ${assetName} not found in latest release`);
       const downloadRes = await fetch(asset.browser_download_url, { cache: "no-store", redirect: "follow" });
-      if (!downloadRes.ok) throw new Error(`Download failed for ${fallbackName}: ${downloadRes.status} ${downloadRes.statusText}`);
+      if (!downloadRes.ok) throw new Error(`Download failed for ${assetName}: ${downloadRes.status} ${downloadRes.statusText}`);
       return { buf: await downloadRes.arrayBuffer(), usedUrl: asset.browser_download_url };
     };
 
@@ -423,7 +431,7 @@
       const files = [];
       for (const part of parts) {
         const url = part.path;
-        setStatus(`Downloading ${url}…`);
+        setStatus(`Downloading ${url}...`);
         log(`Fetching ${url} @ 0x${part.offset.toString(16)}`);
         try {
           const { buf, usedUrl } = await resolveAssetUrl(url, url.split("/").pop());
@@ -448,8 +456,8 @@
       ui.progress.style.width = "0%";
       try {
         const files = await fetchFiles();
-        setStatus("Uploading stub and flashing…");
-        log("Preparing flash writes…");
+        setStatus("Uploading stub and flashing...");
+        log("Preparing flash writes...");
         const flashOptions = {
           fileArray: files,
           eraseAll: false,
@@ -457,7 +465,7 @@
           reportProgress: (fileIndex, written, total) => {
             const pct = Math.min(100, Math.round((written / total) * 100));
             ui.progress.style.width = `${pct}%`;
-            setStatus(`Flashing ${fileIndex + 1}/${files.length} • ${pct}%`);
+            setStatus(`Flashing ${fileIndex + 1}/${files.length} - ${pct}%`);
           },
           calculateMD5Hash: (image) => CryptoJS.MD5(CryptoJS.enc.Latin1.parse(image)),
         };
