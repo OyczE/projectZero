@@ -254,17 +254,17 @@ jobs:
           BUNDLE_ZIP="$BASE_URL/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
           RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
 
-          content=$(cat <<EOF
-Release ${TAG} published.
-Release page:
-${RELEASE_PAGE}
-JanOS (${FW_VERSION}):
-${JANOS_ZIP}
-FAPs (${FAP_VER}):
-${FAP_ZIP}
-Full package:
-${BUNDLE_ZIP}
-EOF
-)
+          content=$(
+            printf '%s\n' \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "JanOS (${FW_VERSION}):" \
+              "${JANOS_ZIP}" \
+              "FAPs (${FAP_VER}):" \
+              "${FAP_ZIP}" \
+              "Full package:" \
+              "${BUNDLE_ZIP}"
+          )
           payload=$(jq -n --arg content "$content" '{content:$content}')
           curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
