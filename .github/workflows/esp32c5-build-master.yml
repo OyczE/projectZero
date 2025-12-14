@@ -18,7 +18,7 @@ on:
 
 jobs:
   firmware:
-    name: Firmware
+    name: JanOS
     permissions:
       contents: write
     runs-on: ubuntu-24.04
@@ -39,10 +39,10 @@ jobs:
             espidf-6.0-${{ runner.os }}-
             espidf-6.0-
 
-      - name: Build firmware (IDF 6.0)
+      - name: Build JanOS (IDF 6.0)
         run: IDF_PY_FLAGS="--preview" bash .github/scripts/container_build.sh --no-docker
 
-      - name: Stamp firmware with JANOS_VERSION
+      - name: Stamp JanOS with JANOS_VERSION
         id: version
         run: |
           set -e
@@ -66,7 +66,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
           echo "release_asset=${dst}" >> "$GITHUB_OUTPUT"
 
-      - name: Package release zip
+      - name: Package JanOS zip
         id: bundle
         run: |
           set -e
@@ -82,7 +82,7 @@ jobs:
             projectZero.bin
           echo "bundle_zip=$(pwd)/$out" >> "$GITHUB_OUTPUT"
 
-      - name: Upload firmware artifacts
+      - name: Upload JanOS artifacts
         uses: actions/upload-artifact@v4
         with:
           name: esp32c5-firmware
@@ -154,7 +154,7 @@ jobs:
     runs-on: ubuntu-24.04
     if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'release' || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '')
     steps:
-      - name: Download firmware artifacts
+      - name: Download JanOS artifacts
         uses: actions/download-artifact@v4
         with:
           name: esp32c5-firmware
@@ -175,7 +175,7 @@ jobs:
           cd release_artifacts/fap
           zip -9 "projectZero-faps-${{ needs.fap.outputs.fap_version }}.zip" *.fap
 
-      - name: Package full bundle (firmware + FAPs)
+      - name: Package full bundle (JanOS + FAPs)
         run: |
           set -e
           cd release_artifacts
@@ -195,7 +195,7 @@ jobs:
             "firmware/projectZero-${FW_VERSION}.bin"
           )
 
-          # Include existing firmware zip if present
+          # Include existing JanOS zip if present
           if [ -f "firmware/projectZero-${FW_VERSION}.zip" ]; then
             files+=("firmware/projectZero-${FW_VERSION}.zip")
           fi
@@ -234,14 +234,20 @@ jobs:
           FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
           FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          REPO: ${{ github.repository }}
         run: |
           set -e
           if [ -z "$DISCORD_WEBHOOK" ]; then
             echo "DISCORD_WEBHOOK not configured, skipping notification"
             exit 0
           fi
-          payload=$(cat <<EOF
-          { "content": "Release ${RELEASE_TAG:-$FW_VERSION} published. Firmware: $FW_VERSION. FAP: ${FAP_VERSION:-n/a}." }
-          EOF
-          )
+          TAG="${RELEASE_TAG:-$FW_VERSION}"
+          FAP_VER="${FAP_VERSION:-unknown}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          JANOS_ZIP="$BASE_URL/projectZero-${FW_VERSION}.zip"
+          FAP_ZIP="$BASE_URL/projectZero-faps-${FAP_VER}.zip"
+          BUNDLE_ZIP="$BASE_URL/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
+
+          content="Release ${TAG} published.\n- JanOS: ${JANOS_ZIP}\n- FAPs: ${FAP_ZIP}\nFull package: ${BUNDLE_ZIP}"
+          payload=$(jq -n --arg content "$content" '{content:$content}')
           curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
