@@ -461,7 +461,7 @@ const flash = async () => {
         log("Preparing flash writes");
         const flashOptions = {
           fileArray: files,
-          flashSize: "detect",
+          flashSize: "4MB",
           eraseAll: false,
           compress: true,
           reportProgress: (fileIndex, written, total) => {
