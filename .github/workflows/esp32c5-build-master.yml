@@ -305,21 +305,7 @@ jobs:
           BUILD_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
-          VERSION_VALUE="${FW_VERSION:-${BUILD_TAG}}"
-          cat > docs/manifest.json <<EOF
-{
-  "name": "projectZero ESP32-C5",
-  "version": "${VERSION_VALUE}",
-  "build": "${BUILD_TAG}",
-  "chipFamily": "ESP32-C5",
-  "parts": [
-    { "path": "firmware/bootloader.bin", "offset": 8192 },
-    { "path": "firmware/partition-table.bin", "offset": 32768 },
-    { "path": "firmware/projectZero.bin", "offset": 65536 }
-  ]
-}
-EOF
-
+          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); manifest={'name':'projectZero ESP32-C5','version':version,'build':build,'chipFamily':'ESP32-C5','parts':[{'path':'firmware/bootloader.bin','offset':8192},{'path':'firmware/partition-table.bin','offset':32768},{'path':'firmware/projectZero.bin','offset':65536}]}; Path('docs/manifest.json').write_text(json.dumps(manifest, indent=2))"
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
         with:
