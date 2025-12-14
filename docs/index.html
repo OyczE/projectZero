@@ -172,6 +172,19 @@
       }
     }
 
+    function checkSupport() {
+      const support = document.querySelector("[data-support]");
+      const button = document.querySelector("esp-web-install-button");
+      if (!("serial" in navigator)) {
+        support.textContent = "Web Serial is not available in this browser. Use Chrome/Edge on desktop over HTTPS.";
+        if (button) button.setAttribute("disabled", "true");
+      } else {
+        support.textContent = "Web Serial ready: Chrome/Edge desktop only.";
+        if (button) button.removeAttribute("disabled");
+      }
+    }
+
+    checkSupport();
     loadManifest();
   </script>
 </head>
@@ -189,6 +202,7 @@
           <h2>Install</h2>
           <p>Chrome / Edge on desktop is required for Web Serial. The manifest and binaries are pulled from the latest GitHub Release automatically.</p>
           <div class="status" data-status>Looking for manifest…</div>
+          <div class="status" data-support></div>
           <div data-build style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;"></div>
         </div>
         <esp-web-install-button manifest="manifest.json"></esp-web-install-button>
