@@ -223,6 +223,7 @@
           <div class="actions">
             <button id="connectBtn">Connect</button>
             <button id="flashBtn" class="ghost" disabled>Flash</button>
+            <button id="monitorBtn" class="ghost" disabled>Serial monitor</button>
             <select id="baudSelect" aria-label="Baud rate">
               <option value="460800">460800 baud</option>
               <option value="921600">921600 baud</option>
@@ -280,6 +281,7 @@
       progress: document.getElementById("progressBar"),
       connectBtn: document.getElementById("connectBtn"),
       flashBtn: document.getElementById("flashBtn"),
+      monitorBtn: document.getElementById("monitorBtn"),
       baud: document.getElementById("baudSelect"),
       releaseInfo: document.getElementById("releaseInfo"),
     };
@@ -292,6 +294,7 @@
       esploader: null,
       chip: null,
       isFlashing: false,
+      monitoring: false,
     };
 
     const log = (msg) => {
@@ -348,6 +351,7 @@
       ensureSupport();
       ui.connectBtn.disabled = true;
       ui.flashBtn.disabled = true;
+      ui.monitorBtn.disabled = true;
       setStatus("Requesting serial port…");
       log("Requesting port access…");
       try {
@@ -365,7 +369,7 @@
           debugLogging: false,
         };
         state.esploader = new ESPLoader(loaderOptions);
-        setStatus("Syncing with chip…");
+        setStatus("Syncing with chip… (hold BOOT + RESET to enter ROM)");
         log("Syncing with chip…");
         state.chip = await state.esploader.main();
         ui.chip.style.display = "inline-flex";
@@ -373,6 +377,7 @@
         setStatus(`Connected to ${state.chip}. Ready to flash.`);
         log(`Connected: ${state.chip}`);
         ui.flashBtn.disabled = false;
+        ui.monitorBtn.disabled = false;
       } catch (err) {
         console.error(err);
         setStatus(err.message || "Connection failed", "error");
@@ -406,6 +411,7 @@
       }
       ui.flashBtn.disabled = true;
       ui.connectBtn.disabled = true;
+      ui.monitorBtn.disabled = true;
       state.isFlashing = true;
       ui.progress.style.width = "0%";
       try {
@@ -436,6 +442,7 @@
         state.isFlashing = false;
         ui.flashBtn.disabled = false;
         ui.connectBtn.disabled = false;
+        ui.monitorBtn.disabled = false;
       }
     };
 
@@ -453,11 +460,47 @@
       state.chip = null;
       ui.chip.style.display = "none";
       ui.flashBtn.disabled = true;
+      ui.monitorBtn.disabled = true;
       setStatus("Disconnected.");
     };
 
     ui.connectBtn.addEventListener("click", () => connect().catch(() => {}));
     ui.flashBtn.addEventListener("click", () => flash().catch(() => {}));
+
+    async function startMonitor() {
+      if (!state.transport) {
+        setStatus("Connect first.", "error");
+        return;
+      }
+      if (state.monitoring) {
+        state.monitoring = false;
+        ui.monitorBtn.textContent = "Serial monitor";
+        setStatus("Monitor stopped.");
+        return;
+      }
+      state.monitoring = true;
+      ui.monitorBtn.textContent = "Stop monitor";
+      setStatus("Monitor started (115200 baud).");
+      log("Opening serial monitor…");
+      try {
+        if (state.transport.connect) {
+          await state.transport.connect(115200);
+        }
+        const reader = state.transport.rawRead();
+        for await (const { value, done } of reader) {
+          if (!state.monitoring || done) break;
+          if (value) log(`> ${value}`);
+        }
+      } catch (err) {
+        setStatus(err.message || "Monitor failed", "error");
+        log(`Monitor error: ${err.message || err}`);
+      } finally {
+        state.monitoring = false;
+        ui.monitorBtn.textContent = "Serial monitor";
+      }
+    }
+
+    ui.monitorBtn.addEventListener("click", () => startMonitor().catch(() => {}));
 
     loadManifest().catch(() => {});
   </script>
