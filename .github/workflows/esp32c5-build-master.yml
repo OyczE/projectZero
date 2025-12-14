@@ -241,7 +241,7 @@ jobs:
             exit 0
           fi
           payload=$(cat <<EOF
-{ "content": "Release ${RELEASE_TAG:-$FW_VERSION} published. Firmware: $FW_VERSION. FAP: ${FAP_VERSION:-n/a}." }
-EOF
-)
+          { "content": "Release ${RELEASE_TAG:-$FW_VERSION} published. Firmware: $FW_VERSION. FAP: ${FAP_VERSION:-n/a}." }
+          EOF
+          )
           curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
