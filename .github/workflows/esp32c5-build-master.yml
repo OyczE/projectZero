@@ -248,6 +248,15 @@ jobs:
           FAP_ZIP="$BASE_URL/projectZero-faps-${FAP_VER}.zip"
           BUNDLE_ZIP="$BASE_URL/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
 
-          content="Release ${TAG} published.\n- JanOS: ${JANOS_ZIP}\n- FAPs: ${FAP_ZIP}\nFull package: ${BUNDLE_ZIP}"
+          content=$(cat <<EOF
+Release ${TAG} published.
+JanOS (${FW_VERSION}):
+${JANOS_ZIP}
+FAPs (${FAP_VER}):
+${FAP_ZIP}
+Full package:
+${BUNDLE_ZIP}
+EOF
+)
           payload=$(jq -n --arg content "$content" '{content:$content}')
           curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
