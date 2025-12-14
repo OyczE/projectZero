@@ -247,14 +247,17 @@ jobs:
           JANOS_ZIP="$BASE_URL/projectZero-${FW_VERSION}.zip"
           FAP_ZIP="$BASE_URL/projectZero-faps-${FAP_VER}.zip"
           BUNDLE_ZIP="$BASE_URL/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
 
           content=$(cat <<EOF
-          Release ${TAG} published.
-          JanOS (${FW_VERSION}):
-          ${JANOS_ZIP}
-          FAPs (${FAP_VER}):
-          ${FAP_ZIP}
-          Full package:
+Release ${TAG} published.
+Release page:
+${RELEASE_PAGE}
+JanOS (${FW_VERSION}):
+${JANOS_ZIP}
+FAPs (${FAP_VER}):
+${FAP_ZIP}
+Full package:
           ${BUNDLE_ZIP}
           EOF
           )
