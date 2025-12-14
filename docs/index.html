@@ -299,7 +299,10 @@
 
     const log = (msg) => {
       const time = new Date().toLocaleTimeString();
-      ui.log.textContent += `[${time}] ${msg}\n`;
+      const lines = Array.isArray(msg) ? msg : [msg];
+      for (const line of lines) {
+        ui.log.textContent += `[${time}] ${line}\n`;
+      }
       ui.log.scrollTop = ui.log.scrollHeight;
     };
 
