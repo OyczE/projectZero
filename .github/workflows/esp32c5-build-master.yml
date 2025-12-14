@@ -127,12 +127,18 @@ jobs:
           set -e
           python - <<'PY'
           from pathlib import Path
+          import os
           import re
+
           text = Path("FLIPPER/Lab_C5.c").read_text(encoding="utf-8", errors="ignore")
           m = re.search(r'#define\s+LAB_C5_VERSION_TEXT\s+"([^"]+)"', text)
           if not m:
             raise SystemExit("LAB_C5_VERSION_TEXT not found")
-          print(f"fap_version={m.group(1)}")
+
+          version = m.group(1)
+          print(f"fap_version={version}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"fap_version={version}\n")
           PY
 
       - name: Upload FAP artifacts
@@ -162,6 +168,13 @@ jobs:
           merge-multiple: true
         continue-on-error: true
 
+      - name: Package FAP zip
+        if: ${{ hashFiles('release_artifacts/fap/*.fap') != '' }}
+        run: |
+          set -e
+          cd release_artifacts/fap
+          zip -9 "projectZero-faps-${{ needs.fap.outputs.fap_version }}.zip" *.fap
+
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -175,6 +188,7 @@ jobs:
             release_artifacts/firmware/projectZero.bin
             release_artifacts/firmware/projectZero-${{ needs.firmware.outputs.fw_version }}.bin
             release_artifacts/firmware/projectZero-${{ needs.firmware.outputs.fw_version }}.zip
+            release_artifacts/fap/projectZero-faps-${{ needs.fap.outputs.fap_version }}.zip
             release_artifacts/fap/*.fap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
