@@ -4,8 +4,8 @@
   "build": "latest",
   "chipFamily": "ESP32-C5",
   "parts": [
-    { "path": "https://github.com/OyczE/projectZero/releases/latest/download/bootloader.bin", "offset": 8192 },
-    { "path": "https://github.com/OyczE/projectZero/releases/latest/download/partition-table.bin", "offset": 32768 },
-    { "path": "https://github.com/OyczE/projectZero/releases/latest/download/projectZero.bin", "offset": 65536 }
+    { "path": "firmware/bootloader.bin", "offset": 8192 },
+    { "path": "firmware/partition-table.bin", "offset": 32768 },
+    { "path": "firmware/projectZero.bin", "offset": 65536 }
   ]
 }
