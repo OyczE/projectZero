@@ -522,20 +522,24 @@ const flash = async () => {
       }
       state.monitoring = true;
       ui.monitorBtn.textContent = "Stop monitor";
-      setStatus("Monitor started (115200 baud).");
+      const baud = parseInt(ui.baud.value, 10) || 115200;
+      setStatus(`Monitor started (${baud} baud).`);
       log("Opening serial monitor");
       try {
-        if (state.transport.connect) {
-          try {
-            await state.transport.connect(115200);
-          } catch (err) {
-            if ((err.message || "").includes("already open")) {
-              log("Port already open, using existing session.");
-            } else {
-              throw err;
-            }
-          }
+        if (state.transport.disconnect) {
+          try { await state.transport.disconnect(); } catch {}
         }
+        if (state.transport.connect) {
+          await state.transport.connect(baud);
+        }
+        // Pulse reset so the app boots before we start reading.
+        try {
+          await state.transport.setDTR(false);
+          await state.transport.setRTS(true);
+          await new Promise((r) => setTimeout(r, 80));
+          await state.transport.setRTS(false);
+          await new Promise((r) => setTimeout(r, 50));
+        } catch {}
         const reader = state.transport.rawRead();
         for await (const { value, done } of reader) {
           if (!state.monitoring || done) break;
