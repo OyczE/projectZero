@@ -175,6 +175,39 @@ jobs:
           cd release_artifacts/fap
           zip -9 "projectZero-faps-${{ needs.fap.outputs.fap_version }}.zip" *.fap
 
+      - name: Package full bundle (firmware + FAPs)
+        run: |
+          set -e
+          cd release_artifacts
+          mkdir -p bundle
+          FW_VERSION="${{ needs.firmware.outputs.fw_version }}"
+          FAP_VERSION="${{ needs.fap.outputs.fap_version }}"
+
+          shopt -s nullglob
+          faps=(fap/*.fap)
+
+          files=(
+            firmware/bootloader.bin
+            firmware/partition-table.bin
+            firmware/flash_board.py
+            firmware/oui_wifi.bin
+            firmware/projectZero.bin
+            "firmware/projectZero-${FW_VERSION}.bin"
+          )
+
+          # Include existing firmware zip if present
+          if [ -f "firmware/projectZero-${FW_VERSION}.zip" ]; then
+            files+=("firmware/projectZero-${FW_VERSION}.zip")
+          fi
+
+          # Add all FAPs (if any)
+          if [ ${#faps[@]} -gt 0 ]; then
+            files+=("${faps[@]}")
+          fi
+
+          out="bundle/projectZero-${FW_VERSION}-with-fap-${FAP_VERSION:-unknown}.zip"
+          zip -9 "$out" "${files[@]}"
+
       - name: Upload binaries to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -189,6 +222,7 @@ jobs:
             release_artifacts/firmware/projectZero-${{ needs.firmware.outputs.fw_version }}.bin
             release_artifacts/firmware/projectZero-${{ needs.firmware.outputs.fw_version }}.zip
             release_artifacts/fap/projectZero-faps-${{ needs.fap.outputs.fap_version }}.zip
+            release_artifacts/bundle/projectZero-*-with-fap-*.zip
             release_artifacts/fap/*.fap
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
