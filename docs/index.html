@@ -526,7 +526,15 @@ const flash = async () => {
       log("Opening serial monitor");
       try {
         if (state.transport.connect) {
-          await state.transport.connect(115200);
+          try {
+            await state.transport.connect(115200);
+          } catch (err) {
+            if ((err.message || "").includes("already open")) {
+              log("Port already open, using existing session.");
+            } else {
+              throw err;
+            }
+          }
         }
         const reader = state.transport.rawRead();
         for await (const { value, done } of reader) {
