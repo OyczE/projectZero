@@ -227,6 +227,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+  discord:
+    name: Discord
+    needs: [release, firmware, fap]
+    runs-on: ubuntu-24.04
+    steps:
       - name: Notify Discord
         if: success()
         env:
@@ -250,16 +255,16 @@ jobs:
           RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
 
           content=$(cat <<EOF
-          Release ${TAG} published.
-          Release page:
-          ${RELEASE_PAGE}
-          JanOS (${FW_VERSION}):
-          ${JANOS_ZIP}
-          FAPs (${FAP_VER}):
-          ${FAP_ZIP}
-          Full package:
-                    ${BUNDLE_ZIP}
-                    EOF
-                    )
+Release ${TAG} published.
+Release page:
+${RELEASE_PAGE}
+JanOS (${FW_VERSION}):
+${JANOS_ZIP}
+FAPs (${FAP_VER}):
+${FAP_ZIP}
+Full package:
+${BUNDLE_ZIP}
+EOF
+)
           payload=$(jq -n --arg content "$content" '{content:$content}')
           curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
