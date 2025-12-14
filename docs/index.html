@@ -389,19 +389,45 @@
       }
     };
 
+    const resolveAssetUrl = async (url, fallbackName) => {
+      const ghMatch = url.match(/github\\.com\\/([^/]+)\\/([^/]+)/);
+      if (!ghMatch) return url;
+      const owner = ghMatch[1];
+      const repo = ghMatch[2];
+
+      // First try direct URL
+      try {
+        const res = await fetch(url, { cache: "no-store", redirect: "follow" });
+        if (res.ok) return { buf: await res.arrayBuffer(), usedUrl: url };
+        if (res.status !== 404) throw new Error(`${res.status} ${res.statusText}`);
+        log(`Primary URL 404, trying GitHub API for ${fallbackName}…`);
+      } catch (err) {
+        log(`Primary fetch failed (${err.message || err}), trying GitHub API…`);
+      }
+
+      // Fallback: GitHub API releases/latest
+      const apiUrl = `https://api.github.com/repos/${owner}/${repo}/releases/latest`;
+      const apiRes = await fetch(apiUrl, { cache: "no-store" });
+      if (!apiRes.ok) throw new Error(`GitHub API failed for ${fallbackName}: ${apiRes.status} ${apiRes.statusText}`);
+      const release = await apiRes.json();
+      const asset = (release.assets || []).find((a) => a.name === fallbackName);
+      if (!asset) throw new Error(`Asset ${fallbackName} not found in latest release`);
+      const downloadRes = await fetch(asset.browser_download_url, { cache: "no-store", redirect: "follow" });
+      if (!downloadRes.ok) throw new Error(`Download failed for ${fallbackName}: ${downloadRes.status} ${downloadRes.statusText}`);
+      return { buf: await downloadRes.arrayBuffer(), usedUrl: asset.browser_download_url };
+    };
+
     const fetchFiles = async () => {
       if (!state.manifest) await loadManifest();
       const parts = state.manifest.parts || [];
       const files = [];
       for (const part of parts) {
         const url = part.path;
-        const resolved = url.replace("https://github.com", "https://raw.githubusercontent.com").replace("/releases/download/", "/releases/download/");
         setStatus(`Downloading ${url}…`);
         log(`Fetching ${url} @ 0x${part.offset.toString(16)}`);
         try {
-          const res = await fetch(resolved, { cache: "no-store", redirect: "follow" });
-          if (!res.ok) throw new Error(`Fetch ${url} failed (${res.status} ${res.statusText})`);
-          const buf = await res.arrayBuffer();
+          const { buf, usedUrl } = await resolveAssetUrl(url, url.split("/").pop());
+          log(`Fetched ${usedUrl}`);
           files.push({ data: bufferToBinaryString(buf), address: part.offset });
         } catch (err) {
           throw new Error(`Failed to fetch ${url}: ${err.message || err}`);
