@@ -568,7 +568,7 @@ jobs:
           mkdir -p bundle
           FW_VERSION="${{ needs.cardputer_package.outputs.fw_version }}"
           for board in adv k132; do
-            out="bundle/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
+            out="bundle/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}-bundle.zip"
             rm -f "$out"
             zip -9 "$out" \
               "firmware/${board}/bootloader-${board}.bin" \
@@ -596,6 +596,8 @@ jobs:
             printf '%s\n' "Web flasher: https://${REPO%/*}.github.io/${REPO#*/}/cardputeradv/"
             printf '%s\n' "ADV firmware: ${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
             printf '%s\n' "K132 firmware: ${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
+            printf '%s\n' "ADV bundle: ${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}-bundle.zip"
+            printf '%s\n' "K132 bundle: ${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}-bundle.zip"
           } > release_notes.md
 
       - name: Create or update GitHub release
@@ -627,8 +629,8 @@ jobs:
             release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher.bin
             "release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher-${FW_VERSION}.bin"
             "release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
-            "release_artifacts/bundle/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
-            "release_artifacts/bundle/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
+            "release_artifacts/bundle/M5MonsterC5-CardputerADV-adv-${FW_VERSION}-bundle.zip"
+            "release_artifacts/bundle/M5MonsterC5-CardputerADV-k132-${FW_VERSION}-bundle.zip"
           )
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
