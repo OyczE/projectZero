@@ -7,6 +7,10 @@ on:
         description: "Optional tag name to upload assets to a release (example 'janos-v1.2.3')"
         required: false
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   firmware:
     name: JanOS
@@ -93,7 +97,13 @@ jobs:
       - name: Install FAP build dependencies (ufbt in venv)
         run: |
           set -e
-          sudo apt-get update && sudo apt-get install -y python3-venv
+          if command -v sudo >/dev/null 2>&1; then
+            apt_prefix=(sudo)
+          else
+            apt_prefix=()
+          fi
+          "${apt_prefix[@]}" apt-get update
+          "${apt_prefix[@]}" apt-get install -y python3-venv
           python3 -m venv /tmp/ufbt-venv
           . /tmp/ufbt-venv/bin/activate
           pip install -U pip ufbt
@@ -108,10 +118,15 @@ jobs:
           [ -f flipper-z-f7-sdk-mntm-011.zip ] || curl -L -o flipper-z-f7-sdk-mntm-011.zip https://github.com/Next-Flip/Momentum-Firmware/releases/download/mntm-011/flipper-z-f7-sdk-mntm-011.zip
           [ -f flipper-z-f7-sdk-mntm-dev-22408e4c.zip ] || curl -L -o flipper-z-f7-sdk-mntm-dev-22408e4c.zip https://up.momentum-fw.dev/builds/firmware/dev/flipper-z-f7-sdk-mntm-dev-22408e4c.zip
 
-      - name: Build Flipper FAP
+      - name: Build Lab_C5 FAP
         run: |
           set -e
           python FLIPPER/build_fap.py --no-upload
+
+      - name: Build FlipperLight FAP
+        run: |
+          set -e
+          python FlipperLight/build_fap.py --sdk-dir FLIPPER/sdk --no-upload
 
       - name: Read FAP version
         id: fap_version
@@ -134,11 +149,13 @@ jobs:
           PY
 
       - name: Upload FAP artifacts
-        if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
+        if: ${{ hashFiles('FLIPPER/dist/*.fap', 'FlipperLight/dist/*.fap') != '' }}
         uses: actions/upload-artifact@v6
         with:
           name: flipper-fap
-          path: FLIPPER/dist/*.fap
+          path: |
+            FLIPPER/dist/*.fap
+            FlipperLight/dist/*.fap
 
   release:
     name: Release
@@ -228,7 +245,7 @@ jobs:
             printf '%s\n' "Release page: ${RELEASE_PAGE}"
             printf '%s\n' "Web flasher: ${PAGES_LINK}"
             printf '%s\n' "JanOS (${FW_VERSION}): ${JANOS_ZIP}"
-            printf '%s\n' "FAPs (${FAP_VER}): ${FAP_ZIP}"
+            printf '%s\n' "FAP bundle (${FAP_VER}): ${FAP_ZIP}"
             printf '%s\n\n' "Full package: ${BUNDLE_ZIP}"
           } > "$notes_file"
 
@@ -308,5 +325,13 @@ jobs:
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
           fi
 
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 

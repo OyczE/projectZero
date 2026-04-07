@@ -6,11 +6,10 @@ on:
       release_tag:
         description: "Optional tag name to upload assets to a release (example 'cardputer-v1.6.0')"
         required: false
-  push:
-    branches: [main, master]
-    paths:
-      - 'M5MonsterC5-CardputerADV/**'
-      - '.github/workflows/m5monsterc5-cardputeradv-build.yml'
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   build:
@@ -73,7 +72,7 @@ jobs:
           name: esp32s3-firmware-k132
           path: release_artifacts/firmware/k132
 
-      - name: Stamp firmware with JANOS_ADV_VERSION
+      - name: Stamp firmware with Cardputer version
         id: version
         run: |
           set -euo pipefail
@@ -109,8 +108,13 @@ jobs:
         run: |
           set -euo pipefail
           if ! python3 -c "import venv" >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y python3-venv
+            if command -v sudo >/dev/null 2>&1; then
+              apt_prefix=(sudo)
+            else
+              apt_prefix=()
+            fi
+            "${apt_prefix[@]}" apt-get update
+            "${apt_prefix[@]}" apt-get install -y python3-venv
           fi
           python3 -m venv /tmp/esptool-venv
           /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
@@ -255,7 +259,15 @@ jobs:
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
           fi
 
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
   discord:
     name: Discord

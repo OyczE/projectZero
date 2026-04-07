@@ -1,0 +1,1225 @@
+name: All In One
+
+on:
+  workflow_dispatch:
+    inputs:
+      janos_tag:
+        description: "Optional JanOS release tag (example 'janos-v1.5.7')"
+        required: false
+      cardputer_tag:
+        description: "Optional Cardputer release tag (example 'cardputer-v1.6.0')"
+        required: false
+      tab5_tag:
+        description: "Optional Tab5 release tag (example 'tab5-v1.2.1')"
+        required: false
+  push:
+    branches: [main, master]
+    paths:
+      - "JanOS/**"
+      - "FLIPPER/**"
+      - "FlipperLight/**"
+      - "M5MonsterC5-CardputerADV/**"
+      - "M5MonsterC5-Tab5/**"
+      - "docs/**"
+      - ".github/scripts/**"
+      - ".github/workflows/all-in-one.yml"
+      - ".github/workflows/esp32c5-build-master.yml"
+      - ".github/workflows/m5monsterc5-cardputeradv-build.yml"
+      - ".github/workflows/m5monsterc5-tab5-build.yml"
+      - ".github/workflows/pages-webflasher.yml"
+
+concurrency:
+  group: all-in-one-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-24.04
+    outputs:
+      janos: ${{ steps.detect.outputs.janos }}
+      cardputer: ${{ steps.detect.outputs.cardputer }}
+      tab5: ${{ steps.detect.outputs.tab5 }}
+      docs: ${{ steps.detect.outputs.docs }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Detect changed areas
+        id: detect
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_BEFORE: ${{ github.event.before }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import fnmatch
+          import os
+          import subprocess
+
+          event_name = os.getenv("EVENT_NAME", "")
+          before = (os.getenv("EVENT_BEFORE", "") or "").strip()
+          sha = os.getenv("GITHUB_SHA", "").strip()
+
+          patterns = {
+              "janos": [
+                  "JanOS/**",
+                  "FLIPPER/**",
+                  "FlipperLight/**",
+                  ".github/scripts/**",
+                  ".github/workflows/all-in-one.yml",
+                  ".github/workflows/esp32c5-build-master.yml",
+              ],
+              "cardputer": [
+                  "M5MonsterC5-CardputerADV/**",
+                  ".github/workflows/all-in-one.yml",
+                  ".github/workflows/m5monsterc5-cardputeradv-build.yml",
+              ],
+              "tab5": [
+                  "M5MonsterC5-Tab5/**",
+                  ".github/workflows/all-in-one.yml",
+                  ".github/workflows/m5monsterc5-tab5-build.yml",
+              ],
+              "docs": [
+                  "docs/**",
+                  "M5MonsterC5-CardputerADV/docs/**",
+                  "M5MonsterC5-Tab5/docs/**",
+                  ".github/workflows/all-in-one.yml",
+                  ".github/workflows/pages-webflasher.yml",
+              ],
+          }
+
+          if event_name == "workflow_dispatch":
+              results = {key: "true" for key in patterns}
+          else:
+              if not before or set(before) == {"0"}:
+                  files = subprocess.check_output(
+                      ["git", "ls-tree", "-r", "--name-only", sha],
+                      text=True,
+                  ).splitlines()
+              else:
+                  files = subprocess.check_output(
+                      ["git", "diff", "--name-only", before, sha],
+                      text=True,
+                  ).splitlines()
+
+              def matches(any_patterns):
+                  for path in files:
+                      if any(fnmatch.fnmatch(path, pattern) for pattern in any_patterns):
+                          return "true"
+                  return "false"
+
+              results = {key: matches(value) for key, value in patterns.items()}
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              for key, value in results.items():
+                  fh.write(f"{key}={value}\n")
+          PY
+
+  janos_firmware:
+    name: Build JanOS
+    needs: changes
+    if: needs.changes.outputs.janos == 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v6.0-beta1
+    permissions:
+      contents: read
+    outputs:
+      fw_version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cache ESP-IDF artifacts
+        uses: actions/cache@v5
+        with:
+          path: /root/.espressif
+          key: espidf-6.0-${{ runner.os }}-${{ hashFiles('JanOS/sdkconfig', 'JanOS/dependencies.lock') }}
+          restore-keys: |
+            espidf-6.0-${{ runner.os }}-
+            espidf-6.0-
+
+      - name: Build JanOS (IDF 6.0)
+        run: IDF_PY_FLAGS="--preview" bash .github/scripts/container_build.sh --no-docker
+
+      - name: Stamp JanOS with JANOS_VERSION
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(python - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("JanOS/main/main.c").read_text(encoding="utf-8")
+          match = re.search(r'JANOS_VERSION\s*"([^"]+)"', text)
+          if not match:
+              raise SystemExit("JANOS_VERSION not found")
+          print(match.group(1))
+          PY
+          )
+          cp "JanOS/binaries-esp32c5/projectZero.bin" "JanOS/binaries-esp32c5/projectZero-${version}.bin"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Package JanOS zip
+        run: |
+          set -euo pipefail
+          cd JanOS/binaries-esp32c5
+          out="projectZero-${{ steps.version.outputs.version }}.zip"
+          rm -f "$out"
+          zip -9 "$out" \
+            bootloader.bin \
+            partition-table.bin \
+            flash_board.py \
+            oui_wifi.bin \
+            "projectZero-${{ steps.version.outputs.version }}.bin" \
+            projectZero.bin
+
+      - name: Upload JanOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32c5-firmware
+          path: JanOS/binaries-esp32c5
+          if-no-files-found: error
+
+  janos_fap:
+    name: Build Flipper FAP
+    needs: [changes, janos_firmware]
+    if: needs.changes.outputs.janos == 'true'
+    runs-on: ubuntu-24.04
+    outputs:
+      fap_version: ${{ steps.fap_version.outputs.fap_version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Install FAP build dependencies
+        run: |
+          set -euo pipefail
+          if command -v sudo >/dev/null 2>&1; then
+            apt_prefix=(sudo)
+          else
+            apt_prefix=()
+          fi
+          "${apt_prefix[@]}" apt-get update
+          "${apt_prefix[@]}" apt-get install -y python3-venv
+          python3 -m venv /tmp/ufbt-venv
+          . /tmp/ufbt-venv/bin/activate
+          pip install -U pip ufbt
+          echo "/tmp/ufbt-venv/bin" >> "$GITHUB_PATH"
+
+      - name: Download Flipper SDKs
+        run: |
+          set -euo pipefail
+          mkdir -p FLIPPER/sdk
+          cd FLIPPER/sdk
+          [ -f flipper-z-f7-sdk-unlshd-083.zip ] || curl -L -o flipper-z-f7-sdk-unlshd-083.zip https://github.com/DarkFlippers/unleashed-firmware/releases/download/unlshd-083/flipper-z-f7-sdk-unlshd-083.zip
+          [ -f flipper-z-f7-sdk-mntm-011.zip ] || curl -L -o flipper-z-f7-sdk-mntm-011.zip https://github.com/Next-Flip/Momentum-Firmware/releases/download/mntm-011/flipper-z-f7-sdk-mntm-011.zip
+          [ -f flipper-z-f7-sdk-mntm-dev-22408e4c.zip ] || curl -L -o flipper-z-f7-sdk-mntm-dev-22408e4c.zip https://up.momentum-fw.dev/builds/firmware/dev/flipper-z-f7-sdk-mntm-dev-22408e4c.zip
+
+      - name: Build Lab_C5 FAP
+        run: |
+          set -euo pipefail
+          python FLIPPER/build_fap.py --no-upload
+
+      - name: Build FlipperLight FAP
+        run: |
+          set -euo pipefail
+          python FlipperLight/build_fap.py --sdk-dir FLIPPER/sdk --no-upload
+
+      - name: Read FAP version
+        id: fap_version
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          text = Path("FLIPPER/Lab_C5.c").read_text(encoding="utf-8", errors="ignore")
+          match = re.search(r'#define\s+LAB_C5_VERSION_TEXT\s+"([^"]+)"', text)
+          if not match:
+              raise SystemExit("LAB_C5_VERSION_TEXT not found")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"fap_version={match.group(1)}\n")
+          PY
+
+      - name: Upload FAP artifacts
+        if: ${{ hashFiles('FLIPPER/dist/*.fap', 'FlipperLight/dist/*.fap') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: flipper-fap
+          path: |
+            FLIPPER/dist/*.fap
+            FlipperLight/dist/*.fap
+
+  janos_release:
+    name: Release JanOS
+    needs: [changes, janos_firmware, janos_fap]
+    if: needs.changes.outputs.janos == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      pull-requests: read
+    outputs:
+      release_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.janos_tag }}
+          FW_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="janos-v${FW_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download JanOS artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32c5-firmware
+          path: release_artifacts/firmware
+
+      - name: Download FAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flipper-fap
+          path: release_artifacts/fap
+          merge-multiple: true
+        continue-on-error: true
+
+      - name: Package FAP zip
+        if: ${{ hashFiles('release_artifacts/fap/*.fap') != '' }}
+        run: |
+          set -euo pipefail
+          cd release_artifacts/fap
+          zip -9 "projectZero-faps-${{ needs.janos_fap.outputs.fap_version }}.zip" *.fap
+
+      - name: Package full bundle
+        run: |
+          set -euo pipefail
+          cd release_artifacts
+          mkdir -p bundle
+          FW_VERSION="${{ needs.janos_firmware.outputs.fw_version }}"
+          FAP_VERSION="${{ needs.janos_fap.outputs.fap_version }}"
+          shopt -s nullglob
+          faps=(fap/*.fap)
+          files=(
+            firmware/bootloader.bin
+            firmware/partition-table.bin
+            firmware/flash_board.py
+            firmware/oui_wifi.bin
+            firmware/projectZero.bin
+            "firmware/projectZero-${FW_VERSION}.bin"
+          )
+          if [ -f "firmware/projectZero-${FW_VERSION}.zip" ]; then
+            files+=("firmware/projectZero-${FW_VERSION}.zip")
+          fi
+          if [ ${#faps[@]} -gt 0 ]; then
+            files+=("${faps[@]}")
+          fi
+          out="bundle/projectZero-${FW_VERSION}-with-fap-${FAP_VERSION:-unknown}.zip"
+          zip -9 "$out" "${files[@]}"
+
+      - name: Build release notes
+        env:
+          FW_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          FAP_VER="${FAP_VERSION:-unknown}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          {
+            printf '%s\n\n' "Release ${TAG} published."
+            printf '%s\n' "Web flasher: https://${REPO%/*}.github.io/${REPO#*/}/"
+            printf '%s\n' "JanOS (${FW_VERSION}): ${BASE_URL}/projectZero-${FW_VERSION}.zip"
+            printf '%s\n' "FAP bundle (${FAP_VER}): ${BASE_URL}/projectZero-faps-${FAP_VER}.zip"
+            printf '%s\n' "Full package: ${BASE_URL}/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FW_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="JanOS ${FW_VERSION}"
+          files=(
+            release_artifacts/firmware/bootloader.bin
+            release_artifacts/firmware/partition-table.bin
+            release_artifacts/firmware/flash_board.py
+            release_artifacts/firmware/oui_wifi.bin
+            release_artifacts/firmware/projectZero.bin
+            "release_artifacts/firmware/projectZero-${FW_VERSION}.bin"
+            "release_artifacts/firmware/projectZero-${FW_VERSION}.zip"
+          )
+          shopt -s nullglob
+          optional=(
+            "release_artifacts/fap/projectZero-faps-${FAP_VERSION}.zip"
+            release_artifacts/bundle/projectZero-*-with-fap-*.zip
+            release_artifacts/fap/*.fap
+          )
+          for file in "${optional[@]}"; do
+            if [ -e "$file" ]; then
+              files+=("$file")
+            fi
+          done
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  cardputer_build:
+    name: Build Cardputer ${{ matrix.board }}
+    needs: changes
+    if: needs.changes.outputs.cardputer == 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v6.0-beta1
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        board: [adv, k132]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cache ESP-IDF artifacts
+        uses: actions/cache@v4
+        with:
+          path: /root/.espressif
+          key: espidf-6.0-${{ runner.os }}-${{ hashFiles('M5MonsterC5-CardputerADV/sdkconfig', 'M5MonsterC5-CardputerADV/dependencies.lock') }}
+          restore-keys: |
+            espidf-6.0-${{ runner.os }}-
+            espidf-6.0-
+
+      - name: Build firmware
+        env:
+          BOARD_LIST: ${{ matrix.board }}
+        run: IDF_PY_FLAGS="--preview" bash M5MonsterC5-CardputerADV/.github/scripts/container_build.sh --no-docker
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-firmware-${{ matrix.board }}
+          path: M5MonsterC5-CardputerADV/binaries-esp32s3/${{ matrix.board }}
+          if-no-files-found: error
+
+  cardputer_package:
+    name: Package Cardputer
+    needs: [changes, cardputer_build]
+    if: needs.changes.outputs.cardputer == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      fw_version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Download ADV artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware-adv
+          path: release_artifacts/firmware/adv
+
+      - name: Download K132 artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware-k132
+          path: release_artifacts/firmware/k132
+
+      - name: Stamp firmware with Cardputer version
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(python - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("M5MonsterC5-CardputerADV/main/main.c").read_text(encoding="utf-8")
+          match = re.search(r'JANOS_ADV_VERSION\s*"([^"]+)"', text)
+          if not match:
+              raise SystemExit("JANOS_ADV_VERSION not found")
+          print(match.group(1))
+          PY
+          )
+          cp "M5MonsterC5-CardputerADV/binaries-esp32s3/flash_board.py" "release_artifacts/firmware/flash_board.py"
+          for board in adv k132; do
+            src_dir="release_artifacts/firmware/${board}"
+            src="${src_dir}/M5MonsterC5-CardputerADV.bin"
+            cp "M5MonsterC5-CardputerADV/binaries-esp32s3/flash_board.py" "${src_dir}/flash_board.py"
+            cp "${src_dir}/bootloader.bin" "${src_dir}/bootloader-${board}.bin"
+            cp "${src_dir}/partition-table.bin" "${src_dir}/partition-table-${board}.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}-${version}.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}-launcher.bin"
+            cp "$src" "${src_dir}/M5MonsterC5-CardputerADV-${board}-launcher-${version}.bin"
+          done
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge full flash images
+        run: |
+          set -euo pipefail
+          if command -v sudo >/dev/null 2>&1; then
+            apt_prefix=(sudo)
+          else
+            apt_prefix=()
+          fi
+          "${apt_prefix[@]}" apt-get update
+          "${apt_prefix[@]}" apt-get install -y python3-venv
+          python3 -m venv /tmp/esptool-venv
+          /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
+          for board in adv k132; do
+            out_dir="release_artifacts/firmware/${board}"
+            /tmp/esptool-venv/bin/python -m esptool --chip esp32s3 merge_bin -o "${out_dir}/M5MonsterC5-CardputerADV-${board}-full-${{ steps.version.outputs.version }}.bin" \
+              --flash_mode dio --flash_freq 80m --flash_size 4MB \
+              0x0 "${out_dir}/bootloader.bin" \
+              0x8000 "${out_dir}/partition-table.bin" \
+              0x10000 "${out_dir}/M5MonsterC5-CardputerADV.bin"
+            cp "${out_dir}/M5MonsterC5-CardputerADV-${board}-full-${{ steps.version.outputs.version }}.bin" \
+              "${out_dir}/M5MonsterC5-CardputerADV-${board}-full.bin"
+          done
+
+      - name: Package firmware zips
+        run: |
+          set -euo pipefail
+          for board in adv k132; do
+            cd "release_artifacts/firmware/${board}"
+            out="M5MonsterC5-CardputerADV-${board}-${{ steps.version.outputs.version }}.zip"
+            rm -f "$out"
+            zip -9 "$out" \
+              "bootloader-${board}.bin" \
+              "partition-table-${board}.bin" \
+              flash_board.py \
+              "M5MonsterC5-CardputerADV-${board}-full.bin" \
+              "M5MonsterC5-CardputerADV-${board}-full-${{ steps.version.outputs.version }}.bin" \
+              "M5MonsterC5-CardputerADV-${board}.bin" \
+              "M5MonsterC5-CardputerADV-${board}-${{ steps.version.outputs.version }}.bin" \
+              "M5MonsterC5-CardputerADV-${board}-launcher.bin" \
+              "M5MonsterC5-CardputerADV-${board}-launcher-${{ steps.version.outputs.version }}.bin"
+            cd - >/dev/null
+          done
+
+      - name: Upload packaged artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: release_artifacts/firmware
+          if-no-files-found: error
+
+  cardputer_release:
+    name: Release Cardputer
+    needs: [changes, cardputer_package]
+    if: needs.changes.outputs.cardputer == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      release_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.cardputer_tag }}
+          FW_VERSION: ${{ needs.cardputer_package.outputs.fw_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="cardputer-v${FW_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download packaged artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: release_artifacts/firmware
+
+      - name: Create release bundles
+        run: |
+          set -euo pipefail
+          cd release_artifacts
+          mkdir -p bundle
+          FW_VERSION="${{ needs.cardputer_package.outputs.fw_version }}"
+          for board in adv k132; do
+            out="bundle/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.zip"
+            rm -f "$out"
+            zip -9 "$out" \
+              "firmware/${board}/bootloader-${board}.bin" \
+              "firmware/${board}/partition-table-${board}.bin" \
+              "firmware/flash_board.py" \
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-full.bin" \
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-full-${FW_VERSION}.bin" \
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}.bin" \
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-${FW_VERSION}.bin" \
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher.bin" \
+              "firmware/${board}/M5MonsterC5-CardputerADV-${board}-launcher-${FW_VERSION}.bin"
+          done
+
+      - name: Build release notes
+        env:
+          FW_VERSION: ${{ needs.cardputer_package.outputs.fw_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          {
+            printf '%s\n\n' "Release ${TAG} published."
+            printf '%s\n' "Web flasher: https://${REPO%/*}.github.io/${REPO#*/}/cardputeradv/"
+            printf '%s\n' "ADV firmware: ${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
+            printf '%s\n' "K132 firmware: ${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FW_VERSION: ${{ needs.cardputer_package.outputs.fw_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="M5MonsterC5 Cardputer ${FW_VERSION}"
+          files=(
+            release_artifacts/firmware/flash_board.py
+            release_artifacts/firmware/adv/bootloader-adv.bin
+            release_artifacts/firmware/adv/partition-table-adv.bin
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-full.bin
+            "release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-full-${FW_VERSION}.bin"
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv.bin
+            "release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.bin"
+            release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher.bin
+            "release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-launcher-${FW_VERSION}.bin"
+            "release_artifacts/firmware/adv/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
+            release_artifacts/firmware/k132/bootloader-k132.bin
+            release_artifacts/firmware/k132/partition-table-k132.bin
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-full.bin
+            "release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-full-${FW_VERSION}.bin"
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132.bin
+            "release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.bin"
+            release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher.bin
+            "release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-launcher-${FW_VERSION}.bin"
+            "release_artifacts/firmware/k132/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
+            "release_artifacts/bundle/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip"
+            "release_artifacts/bundle/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip"
+          )
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  tab5_firmware:
+    name: Build Tab5
+    needs: changes
+    if: needs.changes.outputs.tab5 == 'true'
+    runs-on: ubuntu-24.04
+    container:
+      image: espressif/idf:v5.4.1
+    permissions:
+      contents: read
+    outputs:
+      fw_version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cache ESP-IDF artifacts
+        uses: actions/cache@v4
+        with:
+          path: /root/.espressif
+          key: espidf-5.4.1-${{ runner.os }}-${{ hashFiles('M5MonsterC5-Tab5/sdkconfig', 'M5MonsterC5-Tab5/dependencies.lock') }}
+          restore-keys: |
+            espidf-5.4.1-${{ runner.os }}-
+            espidf-5.4.1-
+
+      - name: Build firmware
+        run: bash M5MonsterC5-Tab5/.github/scripts/container_build.sh --no-docker
+
+      - name: Stamp firmware with Tab5 version
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(python - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("M5MonsterC5-Tab5/main/main.c").read_text(encoding="utf-8")
+          match = re.search(r'JANOS_TAB_VERSION\s*"([^"]+)"', text)
+          if not match:
+              raise SystemExit("JANOS_TAB_VERSION not found")
+          print(match.group(1))
+          PY
+          )
+          cp "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5.bin" "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-${version}.bin"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge full flash image
+        run: |
+          set -euo pipefail
+          if command -v sudo >/dev/null 2>&1; then
+            apt_prefix=(sudo)
+          else
+            apt_prefix=()
+          fi
+          "${apt_prefix[@]}" apt-get update
+          "${apt_prefix[@]}" apt-get install -y python3-venv
+          python3 -m venv /tmp/esptool-venv
+          /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
+          /tmp/esptool-venv/bin/python -m esptool --chip esp32p4 merge_bin \
+            -o "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
+            --flash_mode dio --flash_freq 80m --flash_size 16MB \
+            0x2000 "M5MonsterC5-Tab5/binaries-esp32p4/bootloader.bin" \
+            0x8000 "M5MonsterC5-Tab5/binaries-esp32p4/partition-table.bin" \
+            0x10000 "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5.bin"
+          cp "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
+            "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-full.bin"
+
+      - name: Package firmware zip
+        run: |
+          set -euo pipefail
+          cd M5MonsterC5-Tab5/binaries-esp32p4
+          out="M5MonsterC5-Tab5-${{ steps.version.outputs.version }}.zip"
+          rm -f "$out"
+          zip -9 "$out" \
+            bootloader.bin \
+            partition-table.bin \
+            flash_board.py \
+            M5MonsterC5-Tab5-full.bin \
+            "M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
+            "M5MonsterC5-Tab5-${{ steps.version.outputs.version }}.bin" \
+            M5MonsterC5-Tab5.bin
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32p4-firmware
+          path: M5MonsterC5-Tab5/binaries-esp32p4
+          if-no-files-found: error
+
+  tab5_release:
+    name: Release Tab5
+    needs: [changes, tab5_firmware]
+    if: needs.changes.outputs.tab5 == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    outputs:
+      release_tag: ${{ steps.meta.outputs.tag }}
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.tab5_tag }}
+          FW_VERSION: ${{ needs.tab5_firmware.outputs.fw_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="tab5-v${FW_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32p4-firmware
+          path: release_artifacts/firmware
+
+      - name: Build bundle
+        run: |
+          set -euo pipefail
+          cd release_artifacts
+          mkdir -p bundle
+          FW_VERSION="${{ needs.tab5_firmware.outputs.fw_version }}"
+          zip -9 "bundle/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip" \
+            firmware/bootloader.bin \
+            firmware/partition-table.bin \
+            firmware/flash_board.py \
+            firmware/M5MonsterC5-Tab5-full.bin \
+            "firmware/M5MonsterC5-Tab5-full-${FW_VERSION}.bin" \
+            firmware/M5MonsterC5-Tab5.bin \
+            "firmware/M5MonsterC5-Tab5-${FW_VERSION}.bin" \
+            "firmware/M5MonsterC5-Tab5-${FW_VERSION}.zip"
+
+      - name: Build release notes
+        env:
+          FW_VERSION: ${{ needs.tab5_firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          {
+            printf '%s\n\n' "Release ${TAG} published."
+            printf '%s\n' "Web flasher: https://${REPO%/*}.github.io/${REPO#*/}/tab5/"
+            printf '%s\n' "Firmware ZIP: ${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}.zip"
+            printf '%s\n' "Bundle: ${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FW_VERSION: ${{ needs.tab5_firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="M5MonsterC5 Tab5 ${FW_VERSION}"
+          files=(
+            release_artifacts/firmware/bootloader.bin
+            release_artifacts/firmware/partition-table.bin
+            release_artifacts/firmware/flash_board.py
+            release_artifacts/firmware/M5MonsterC5-Tab5-full.bin
+            "release_artifacts/firmware/M5MonsterC5-Tab5-full-${FW_VERSION}.bin"
+            release_artifacts/firmware/M5MonsterC5-Tab5.bin
+            "release_artifacts/firmware/M5MonsterC5-Tab5-${FW_VERSION}.bin"
+            "release_artifacts/firmware/M5MonsterC5-Tab5-${FW_VERSION}.zip"
+            "release_artifacts/bundle/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          )
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  pages:
+    name: Deploy Pages
+    needs:
+      - changes
+      - janos_firmware
+      - janos_release
+      - cardputer_package
+      - cardputer_release
+      - tab5_firmware
+      - tab5_release
+    if: >-
+      ${{
+        always() &&
+        !cancelled() &&
+        needs.changes.result == 'success' &&
+        needs.janos_firmware.result != 'failure' &&
+        needs.janos_release.result != 'failure' &&
+        needs.cardputer_package.result != 'failure' &&
+        needs.cardputer_release.result != 'failure' &&
+        needs.tab5_firmware.result != 'failure' &&
+        needs.tab5_release.result != 'failure'
+      }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - name: Resolve sources and tags
+        id: meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          C5_CHANGED: ${{ needs.changes.outputs.janos }}
+          C5_RELEASE_TAG: ${{ needs.janos_release.outputs.release_tag }}
+          C5_INPUT_TAG: ${{ inputs.janos_tag }}
+          S3_CHANGED: ${{ needs.changes.outputs.cardputer }}
+          S3_RELEASE_TAG: ${{ needs.cardputer_release.outputs.release_tag }}
+          S3_INPUT_TAG: ${{ inputs.cardputer_tag }}
+          P4_CHANGED: ${{ needs.changes.outputs.tab5 }}
+          P4_RELEASE_TAG: ${{ needs.tab5_release.outputs.release_tag }}
+          P4_INPUT_TAG: ${{ inputs.tab5_tag }}
+        run: |
+          set -euo pipefail
+          gh api "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
+          python - <<'PY'
+          import fnmatch
+          import json
+          import os
+
+          with open("releases.json", encoding="utf-8") as fh:
+              releases = json.load(fh)
+
+          specs = {
+              "c5": {
+                  "changed": (os.getenv("C5_CHANGED") or "").strip() == "true",
+                  "release_tag": (os.getenv("C5_RELEASE_TAG") or "").strip(),
+                  "input_tag": (os.getenv("C5_INPUT_TAG") or "").strip(),
+                  "patterns": ["bootloader.bin", "partition-table.bin", "projectZero.bin"],
+              },
+              "s3": {
+                  "changed": (os.getenv("S3_CHANGED") or "").strip() == "true",
+                  "release_tag": (os.getenv("S3_RELEASE_TAG") or "").strip(),
+                  "input_tag": (os.getenv("S3_INPUT_TAG") or "").strip(),
+                  "patterns": [
+                      "bootloader-adv.bin",
+                      "partition-table-adv.bin",
+                      "M5MonsterC5-CardputerADV-adv.bin",
+                      "bootloader-k132.bin",
+                      "partition-table-k132.bin",
+                      "M5MonsterC5-CardputerADV-k132.bin",
+                  ],
+              },
+              "p4": {
+                  "changed": (os.getenv("P4_CHANGED") or "").strip() == "true",
+                  "release_tag": (os.getenv("P4_RELEASE_TAG") or "").strip(),
+                  "input_tag": (os.getenv("P4_INPUT_TAG") or "").strip(),
+                  "patterns": ["bootloader.bin", "partition-table.bin", "M5MonsterC5-Tab5.bin"],
+              },
+          }
+
+          def matches(release, patterns):
+              assets = [asset.get("name", "") for asset in release.get("assets", [])]
+              return all(any(fnmatch.fnmatch(asset_name, pattern) for asset_name in assets) for pattern in patterns)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              for key, spec in specs.items():
+                  if spec["changed"]:
+                      tag = spec["release_tag"] or spec["input_tag"]
+                      source = "artifact"
+                  else:
+                      tag = spec["input_tag"]
+                      if not tag:
+                          for release in releases:
+                              if release.get("draft"):
+                                  continue
+                              if matches(release, spec["patterns"]):
+                                  tag = release["tag_name"]
+                                  break
+                      source = "release"
+                  if not tag:
+                      raise SystemExit(f"Could not resolve tag for {key}")
+                  out.write(f"{key}_tag={tag}\n")
+                  out.write(f"{key}_source={source}\n")
+          PY
+
+      - name: Prepare docs tree
+        run: |
+          set -euo pipefail
+          rm -rf docs/firmware docs/cardputeradv docs/tab5 incoming
+          mkdir -p incoming docs/cardputeradv docs/tab5
+          cp -R M5MonsterC5-CardputerADV/docs/. docs/cardputeradv/
+          cp -R M5MonsterC5-Tab5/docs/. docs/tab5/
+          rm -rf docs/cardputeradv/firmware docs/tab5/firmware
+          rm -f docs/cardputeradv/manifest.json docs/cardputeradv/manifest_k132.json docs/tab5/manifest.json docs/manifest.json
+          find docs -name '.DS_Store' -delete
+
+      - name: Download JanOS artifacts from this run
+        if: steps.meta.outputs.c5_source == 'artifact'
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32c5-firmware
+          path: incoming/janos
+
+      - name: Download JanOS artifacts from release
+        if: steps.meta.outputs.c5_source == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.c5_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p incoming/janos
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/janos \
+            --pattern "bootloader.bin" \
+            --pattern "partition-table.bin" \
+            --pattern "projectZero.bin" \
+            --pattern "projectZero-*.bin"
+
+      - name: Build JanOS docs artifacts
+        id: janos_meta
+        env:
+          VERSION_HINT: ${{ needs.janos_firmware.outputs.fw_version }}
+          BUILD_TAG: ${{ steps.meta.outputs.c5_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/firmware
+          if [ ! -f incoming/janos/projectZero.bin ]; then
+            alt="$(find incoming/janos -maxdepth 1 -type f -name 'projectZero-*.bin' | head -n1 || true)"
+            if [ -n "$alt" ]; then cp "$alt" incoming/janos/projectZero.bin; fi
+          fi
+          cp incoming/janos/bootloader.bin docs/firmware/
+          cp incoming/janos/partition-table.bin docs/firmware/
+          cp incoming/janos/projectZero.bin docs/firmware/
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          version = (os.getenv("VERSION_HINT") or "").strip()
+          build_tag = (os.getenv("BUILD_TAG") or "").strip()
+          if not version:
+              for candidate in sorted(Path("incoming/janos").glob("projectZero-*.bin")):
+                  if candidate.name != "projectZero.bin":
+                      version = candidate.name[len("projectZero-"):-len(".bin")]
+                      break
+          if not version:
+              version = build_tag
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\n")
+          PY
+
+      - name: Build JanOS manifest
+        env:
+          FW_VERSION: ${{ steps.janos_meta.outputs.version }}
+          BUILD_TAG: ${{ steps.meta.outputs.c5_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = {
+              "name": "projectZero ESP32-C5",
+              "version": os.getenv("FW_VERSION") or os.getenv("BUILD_TAG"),
+              "build": os.getenv("BUILD_TAG") or "manual",
+              "chipFamily": "ESP32-C5",
+              "parts": [
+                  {"path": "firmware/bootloader.bin", "offset": 8192},
+                  {"path": "firmware/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/projectZero.bin", "offset": 131072},
+                  {"path": "firmware/projectZero.bin", "offset": 4259840},
+              ],
+          }
+          Path("docs/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Download Cardputer artifacts from this run
+        if: steps.meta.outputs.s3_source == 'artifact'
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32s3-firmware
+          path: incoming/cardputer
+
+      - name: Download Cardputer artifacts from release
+        if: steps.meta.outputs.s3_source == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.s3_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p incoming/cardputer/tmp
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/cardputer/tmp \
+            --pattern "bootloader-adv.bin" \
+            --pattern "partition-table-adv.bin" \
+            --pattern "M5MonsterC5-CardputerADV-adv*.bin" \
+            --pattern "bootloader-k132.bin" \
+            --pattern "partition-table-k132.bin" \
+            --pattern "M5MonsterC5-CardputerADV-k132*.bin"
+
+      - name: Build Cardputer docs artifacts
+        id: cardputer_meta
+        env:
+          VERSION_HINT: ${{ needs.cardputer_package.outputs.fw_version }}
+          BUILD_TAG: ${{ steps.meta.outputs.s3_tag }}
+          SOURCE_KIND: ${{ steps.meta.outputs.s3_source }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/cardputeradv/firmware/adv docs/cardputeradv/firmware/k132
+          python - <<'PY'
+          import os
+          import shutil
+          from pathlib import Path
+
+          source_kind = os.getenv("SOURCE_KIND")
+          root = Path("incoming/cardputer")
+          if source_kind == "artifact":
+              base = root
+              search_dir = root / "adv"
+          else:
+              base = root / "tmp"
+              search_dir = base
+
+          mapping = {
+              base / "adv" / "bootloader-adv.bin" if source_kind == "artifact" else base / "bootloader-adv.bin": Path("docs/cardputeradv/firmware/adv/bootloader.bin"),
+              base / "adv" / "partition-table-adv.bin" if source_kind == "artifact" else base / "partition-table-adv.bin": Path("docs/cardputeradv/firmware/adv/partition-table.bin"),
+              base / "adv" / "M5MonsterC5-CardputerADV-adv.bin" if source_kind == "artifact" else base / "M5MonsterC5-CardputerADV-adv.bin": Path("docs/cardputeradv/firmware/adv/M5MonsterC5-CardputerADV.bin"),
+              base / "k132" / "bootloader-k132.bin" if source_kind == "artifact" else base / "bootloader-k132.bin": Path("docs/cardputeradv/firmware/k132/bootloader.bin"),
+              base / "k132" / "partition-table-k132.bin" if source_kind == "artifact" else base / "partition-table-k132.bin": Path("docs/cardputeradv/firmware/k132/partition-table.bin"),
+              base / "k132" / "M5MonsterC5-CardputerADV-k132.bin" if source_kind == "artifact" else base / "M5MonsterC5-CardputerADV-k132.bin": Path("docs/cardputeradv/firmware/k132/M5MonsterC5-CardputerADV.bin"),
+          }
+
+          for src, dst in mapping.items():
+              if not src.is_file():
+                  raise SystemExit(f"Missing artifact: {src}")
+              shutil.copy2(src, dst)
+
+          version = (os.getenv("VERSION_HINT") or "").strip()
+          if not version:
+              for candidate in sorted(search_dir.glob("M5MonsterC5-CardputerADV-adv-*.bin")):
+                  name = candidate.name
+                  if "-full-" in name or "-launcher-" in name:
+                      continue
+                  version = name[len("M5MonsterC5-CardputerADV-adv-"):-len(".bin")]
+                  break
+          if not version:
+              version = (os.getenv("BUILD_TAG") or "").strip()
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\n")
+          PY
+
+      - name: Build Cardputer manifests
+        env:
+          FW_VERSION: ${{ steps.cardputer_meta.outputs.version }}
+          BUILD_TAG: ${{ steps.meta.outputs.s3_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          version = os.getenv("FW_VERSION") or os.getenv("BUILD_TAG")
+          build = os.getenv("BUILD_TAG") or "manual"
+          base = {"version": version, "build": build, "chipFamily": "ESP32-S3"}
+          adv = {
+              "name": "M5MonsterC5-CardputerADV ESP32-S3 (ADV)",
+              "parts": [
+                  {"path": "firmware/adv/bootloader.bin", "offset": 0},
+                  {"path": "firmware/adv/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/adv/M5MonsterC5-CardputerADV.bin", "offset": 65536},
+              ],
+          }
+          k132 = {
+              "name": "M5MonsterC5-CardputerADV ESP32-S3 (K132)",
+              "parts": [
+                  {"path": "firmware/k132/bootloader.bin", "offset": 0},
+                  {"path": "firmware/k132/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/k132/M5MonsterC5-CardputerADV.bin", "offset": 65536},
+              ],
+          }
+          Path("docs/cardputeradv/manifest.json").write_text(json.dumps({**base, **adv}, indent=2) + "\n", encoding="utf-8")
+          Path("docs/cardputeradv/manifest_k132.json").write_text(json.dumps({**base, **k132}, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Download Tab5 artifacts from this run
+        if: steps.meta.outputs.p4_source == 'artifact'
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32p4-firmware
+          path: incoming/tab5
+
+      - name: Download Tab5 artifacts from release
+        if: steps.meta.outputs.p4_source == 'release'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.p4_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p incoming/tab5
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/tab5 \
+            --pattern "bootloader.bin" \
+            --pattern "partition-table.bin" \
+            --pattern "M5MonsterC5-Tab5.bin" \
+            --pattern "M5MonsterC5-Tab5-*.bin"
+
+      - name: Build Tab5 docs artifacts
+        id: tab5_meta
+        env:
+          VERSION_HINT: ${{ needs.tab5_firmware.outputs.fw_version }}
+          BUILD_TAG: ${{ steps.meta.outputs.p4_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/tab5/firmware
+          if [ ! -f incoming/tab5/M5MonsterC5-Tab5.bin ]; then
+            alt="$(find incoming/tab5 -maxdepth 1 -type f -name 'M5MonsterC5-Tab5-*.bin' ! -name '*-full*' | head -n1 || true)"
+            if [ -n "$alt" ]; then cp "$alt" incoming/tab5/M5MonsterC5-Tab5.bin; fi
+          fi
+          cp incoming/tab5/bootloader.bin docs/tab5/firmware/
+          cp incoming/tab5/partition-table.bin docs/tab5/firmware/
+          cp incoming/tab5/M5MonsterC5-Tab5.bin docs/tab5/firmware/
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          version = (os.getenv("VERSION_HINT") or "").strip()
+          build_tag = (os.getenv("BUILD_TAG") or "").strip()
+          if not version:
+              for candidate in sorted(Path("incoming/tab5").glob("M5MonsterC5-Tab5-*.bin")):
+                  if candidate.name == "M5MonsterC5-Tab5.bin" or "-full" in candidate.name:
+                      continue
+                  version = candidate.name[len("M5MonsterC5-Tab5-"):-len(".bin")]
+                  break
+          if not version:
+              version = build_tag
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+              fh.write(f"version={version}\n")
+          PY
+
+      - name: Build Tab5 manifest
+        env:
+          FW_VERSION: ${{ steps.tab5_meta.outputs.version }}
+          BUILD_TAG: ${{ steps.meta.outputs.p4_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+          manifest = {
+              "name": "M5MonsterC5-Tab5 ESP32-P4",
+              "version": os.getenv("FW_VERSION") or os.getenv("BUILD_TAG"),
+              "build": os.getenv("BUILD_TAG") or "manual",
+              "chipFamily": "ESP32-P4",
+              "parts": [
+                  {"path": "firmware/bootloader.bin", "offset": 8192},
+                  {"path": "firmware/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/M5MonsterC5-Tab5.bin", "offset": 65536},
+              ],
+          }
+          Path("docs/tab5/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

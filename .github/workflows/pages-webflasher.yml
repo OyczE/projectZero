@@ -12,19 +12,14 @@ on:
       tab5_tag:
         description: "Optional release tag for the Tab5 flasher (example 'tab5-v1.2.1')"
         required: false
-  push:
-    branches: [main, master]
-    paths:
-      - "docs/**"
-      - "M5MonsterC5-CardputerADV/docs/**"
-      - "M5MonsterC5-Tab5/docs/**"
-      - ".github/workflows/pages-webflasher.yml"
-  release:
-    types: [published, edited]
 
 concurrency:
   group: github-pages
   cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   pages:
@@ -145,7 +140,7 @@ jobs:
             fi
           done
 
-          fw_version="$(find docs/firmware -maxdepth 1 -type f -name 'projectZero-*.bin' | head -n1 | xargs -n1 basename | sed -E 's/^projectZero-([^.]*)\.bin$/\1/')"
+          fw_version="$(find docs/firmware -maxdepth 1 -type f -name 'projectZero-*.bin' | head -n1 | xargs -r -n1 basename | sed -E 's/^projectZero-([^.]*)\.bin$/\1/')"
           if [ -z "$fw_version" ]; then
             fw_version="${RELEASE_TAG}"
           fi

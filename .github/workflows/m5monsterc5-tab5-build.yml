@@ -6,11 +6,10 @@ on:
       release_tag:
         description: "Optional tag name to upload assets to a release (example 'tab5-v1.2.1')"
         required: false
-  push:
-    branches: [main, master]
-    paths:
-      - 'M5MonsterC5-Tab5/**'
-      - '.github/workflows/m5monsterc5-tab5-build.yml'
+
+defaults:
+  run:
+    shell: bash
 
 jobs:
   firmware:
@@ -38,7 +37,7 @@ jobs:
       - name: Build firmware
         run: bash M5MonsterC5-Tab5/.github/scripts/container_build.sh --no-docker
 
-      - name: Stamp firmware with JANOS_TAB_VERSION
+      - name: Stamp firmware with Tab5 version
         id: version
         run: |
           set -euo pipefail
@@ -65,8 +64,13 @@ jobs:
         run: |
           set -euo pipefail
           if ! python3 -c "import venv" >/dev/null 2>&1; then
-            sudo apt-get update
-            sudo apt-get install -y python3-venv
+            if command -v sudo >/dev/null 2>&1; then
+              apt_prefix=(sudo)
+            else
+              apt_prefix=()
+            fi
+            "${apt_prefix[@]}" apt-get update
+            "${apt_prefix[@]}" apt-get install -y python3-venv
           fi
           python3 -m venv /tmp/esptool-venv
           /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
@@ -187,7 +191,15 @@ jobs:
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
           fi
 
-          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
 
   discord:
     name: Discord
