@@ -1,0 +1,27 @@
+# Cardputer-ADV Configuration
+
+# Target
+CONFIG_IDF_TARGET="esp32s3"
+
+# Flash Configuration
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# PSRAM Configuration (Cardputer ADV does NOT have PSRAM)
+CONFIG_SPIRAM=n
+
+# CPU Frequency
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# FreeRTOS
+CONFIG_FREERTOS_HZ=1000
+
+# Partition Table
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# Log Level
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+# Allow orphan sections to be reported as warnings (fixes .init from toolchain)
+CONFIG_COMPILER_ORPHAN_SECTIONS_WARNING=y

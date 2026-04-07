@@ -1,10 +1,10 @@
-name: ESP32C5 Rebuild Release (No Discord)
+name: JanOS Rebuild Release (No Discord)
 
 on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: "Optional tag name to upload assets to a release (example 'v1.2.3')"
+        description: "Optional tag name to upload assets to a release (example 'janos-v1.2.3')"
         required: false
 
 jobs:
@@ -25,7 +25,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: /root/.espressif
-          key: espidf-6.0-${{ runner.os }}-${{ hashFiles('ESP32C5/sdkconfig', 'ESP32C5/dependencies.lock') }}
+          key: espidf-6.0-${{ runner.os }}-${{ hashFiles('JanOS/sdkconfig', 'JanOS/dependencies.lock') }}
           restore-keys: |
             espidf-6.0-${{ runner.os }}-
             espidf-6.0-
@@ -40,15 +40,15 @@ jobs:
           version=$(python - <<'PY'
           from pathlib import Path
           import re
-          text = Path("ESP32C5/main/main.c").read_text()
+          text = Path("JanOS/main/main.c").read_text()
           m = re.search(r'JANOS_VERSION\s*"([^"]+)"', text)
           if not m:
               raise SystemExit("JANOS_VERSION not found")
           print(m.group(1))
           PY
           )
-          src="ESP32C5/binaries-esp32c5/projectZero.bin"
-          dst="ESP32C5/binaries-esp32c5/projectZero-${version}.bin"
+          src="JanOS/binaries-esp32c5/projectZero.bin"
+          dst="JanOS/binaries-esp32c5/projectZero-${version}.bin"
           if [ ! -f "$src" ]; then
             echo "Missing firmware: $src" >&2
             exit 1
@@ -61,7 +61,7 @@ jobs:
         id: bundle
         run: |
           set -e
-          cd ESP32C5/binaries-esp32c5
+          cd JanOS/binaries-esp32c5
           out="projectZero-${{ steps.version.outputs.version }}.zip"
           rm -f "$out"
           zip -9 "$out" \
@@ -77,7 +77,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: esp32c5-firmware
-          path: ESP32C5/binaries-esp32c5
+          path: JanOS/binaries-esp32c5
           if-no-files-found: error
 
   fap:
@@ -209,12 +209,12 @@ jobs:
           FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
           FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
           REPO: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('janos-v{0}', needs.firmware.outputs.fw_version) }}
         run: |
           set -euo pipefail
           notes_file="release_notes.md"
-          TAG="$(printf '%s' "${RELEASE_TAG:-v${FW_VERSION}}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-          if [ -z "$TAG" ]; then TAG="v${FW_VERSION}"; fi
+          TAG="$(printf '%s' "${RELEASE_TAG:-janos-v${FW_VERSION}}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$TAG" ]; then TAG="janos-v${FW_VERSION}"; fi
           FAP_VER="${FAP_VERSION:-unknown}"
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
           JANOS_ZIP="$BASE_URL/projectZero-${FW_VERSION}.zip"
@@ -270,12 +270,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
           FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
-          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('v{0}', needs.firmware.outputs.fw_version) }}
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('janos-v{0}', needs.firmware.outputs.fw_version) }}
         run: |
           set -euo pipefail
-          TAG="$(printf '%s' "${RELEASE_TAG:-v${FW_VERSION}}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-          if [ -z "$TAG" ]; then TAG="v${FW_VERSION}"; fi
-          NAME="projectZero ${FW_VERSION}"
+          TAG="$(printf '%s' "${RELEASE_TAG:-janos-v${FW_VERSION}}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+          if [ -z "$TAG" ]; then TAG="janos-v${FW_VERSION}"; fi
+          NAME="JanOS ${FW_VERSION}"
 
           echo "Using release tag: '$TAG'"
 
@@ -309,94 +309,4 @@ jobs:
           fi
 
           gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"
-
-  pages:
-    name: Pages Web Flasher
-    needs: [release, firmware, fap]
-    if: ${{ needs.release.result == 'success' }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: read
-      pages: write
-      id-token: write
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    outputs:
-      page_url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-        with:
-          enablement: true
-
-      - name: Resolve release tag
-        id: meta
-        env:
-          EVENT_TAG: ${{ github.event.release.tag_name }}
-          INPUT_TAG: ${{ inputs.release_tag }}
-          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
-        run: |
-          set -euo pipefail
-          TAG="$(printf '%s' "${EVENT_TAG:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
-          if [ -z "$TAG" ]; then TAG="$(printf '%s' "${INPUT_TAG:-}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"; fi
-          if [ -z "$TAG" ]; then TAG="v${FW_VERSION}"; fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Using tag: '$TAG'"
-
-      - name: Download release assets
-        id: download
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          TAG="${{ steps.meta.outputs.tag }}"
-          rm -rf docs/firmware
-          mkdir -p docs/firmware
-
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir docs/firmware \
-            --pattern "bootloader.bin" \
-            --pattern "partition-table.bin" \
-            --pattern "projectZero*.bin"
-
-          ls -lh docs/firmware
-
-          if [ ! -f docs/firmware/projectZero.bin ]; then
-            alt=$(ls docs/firmware/projectZero-*.bin 2>/dev/null | head -n1 || true)
-            if [ -n "$alt" ]; then
-              cp "$alt" docs/firmware/projectZero.bin
-            fi
-          fi
-
-          for f in bootloader.bin partition-table.bin projectZero.bin; do
-            if [ ! -f "docs/firmware/$f" ]; then
-              echo "Missing $f in release assets for tag ${TAG}" >&2
-              exit 1
-            fi
-          done
-
-          fw_version=$(ls docs/firmware/projectZero-*.bin 2>/dev/null | head -n1 | xargs -n1 basename | sed -E 's/^projectZero-([^.]*)\\.bin$/\\1/')
-          if [ -z "$fw_version" ]; then
-            fw_version="${TAG}"
-          fi
-          echo "fw_version=$fw_version" >> "$GITHUB_OUTPUT"
-
-      - name: Build manifest.json
-        env:
-          FW_VERSION: ${{ steps.download.outputs.fw_version }}
-          BUILD_TAG: ${{ steps.meta.outputs.tag }}
-        run: |
-          set -euo pipefail
-          python -c "import os, json; from pathlib import Path; version=os.getenv('FW_VERSION') or os.getenv('BUILD_TAG'); build=os.getenv('BUILD_TAG','manual'); manifest={'name':'projectZero ESP32-C5','version':version,'build':build,'chipFamily':'ESP32-C5','parts':[{'path':'firmware/bootloader.bin','offset':8192},{'path':'firmware/partition-table.bin','offset':32768},{'path':'firmware/projectZero.bin','offset':131072},{'path':'firmware/projectZero.bin','offset':4259840}]}; Path('docs/manifest.json').write_text(json.dumps(manifest, indent=2))"
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v4
-        with:
-          path: docs
-
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
 

@@ -1,24 +1,35 @@
-name: Pages Web Flasher (Release Assets)
+name: Pages Web Flashers
 
 on:
   workflow_dispatch:
     inputs:
-      release_tag:
-        description: "Release tag to publish to GitHub Pages (example: v1.3.4)"
+      janos_tag:
+        description: "Optional release tag for the JanOS flasher (example 'janos-v1.5.7')"
+        required: false
+      cardputer_tag:
+        description: "Optional release tag for the Cardputer ADV/K132 flasher (example 'cardputer-v1.6.0')"
+        required: false
+      tab5_tag:
+        description: "Optional release tag for the Tab5 flasher (example 'tab5-v1.2.1')"
         required: false
   push:
-    branches: [main]
+    branches: [main, master]
     paths:
       - "docs/**"
+      - "M5MonsterC5-CardputerADV/docs/**"
+      - "M5MonsterC5-Tab5/docs/**"
       - ".github/workflows/pages-webflasher.yml"
+  release:
+    types: [published, edited]
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: true
 
 jobs:
   pages:
-    name: Deploy Web Flasher (Pages)
+    name: Deploy Unified Flashers
     runs-on: ubuntu-24.04
-    concurrency:
-      group: github-pages
-      cancel-in-progress: true
     permissions:
       contents: read
       pages: write
@@ -28,49 +39,100 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Pages
-        uses: actions/configure-pages@v4
+        uses: actions/configure-pages@v5
         with:
           enablement: true
 
-      - name: Resolve release tag
+      - name: Resolve release tags
         id: meta
         env:
-          INPUT_TAG: ${{ inputs.release_tag }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          C5_INPUT_TAG: ${{ inputs.janos_tag }}
+          S3_INPUT_TAG: ${{ inputs.cardputer_tag }}
+          P4_INPUT_TAG: ${{ inputs.tab5_tag }}
         run: |
           set -euo pipefail
-          TAG="${INPUT_TAG:-}"
-          if [ -z "$TAG" ]; then
-            TAG="$(gh api "repos/${GITHUB_REPOSITORY}/releases/latest" --jq .tag_name)"
-          fi
-          if [ -z "$TAG" ] || [ "$TAG" = "null" ]; then
-            echo "Could not resolve a release tag. Provide release_tag input or publish a Release." >&2
-            exit 1
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "Using tag: $TAG"
+          gh api "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
+          python - <<'PY'
+          import fnmatch
+          import json
+          import os
+          import sys
 
-      - name: Download release assets
+          with open("releases.json", encoding="utf-8") as fh:
+              releases = json.load(fh)
+
+          specs = {
+              "c5": {
+                  "input": (os.getenv("C5_INPUT_TAG") or "").strip(),
+                  "patterns": ["bootloader.bin", "partition-table.bin", "projectZero.bin"],
+              },
+              "s3": {
+                  "input": (os.getenv("S3_INPUT_TAG") or "").strip(),
+                  "patterns": [
+                      "bootloader-adv.bin",
+                      "partition-table-adv.bin",
+                      "M5MonsterC5-CardputerADV-adv.bin",
+                      "bootloader-k132.bin",
+                      "partition-table-k132.bin",
+                      "M5MonsterC5-CardputerADV-k132.bin",
+                  ],
+              },
+              "p4": {
+                  "input": (os.getenv("P4_INPUT_TAG") or "").strip(),
+                  "patterns": ["bootloader.bin", "partition-table.bin", "M5MonsterC5-Tab5.bin"],
+              },
+          }
+
+          def matches(release, patterns):
+              assets = [asset.get("name", "") for asset in release.get("assets", [])]
+              return all(any(fnmatch.fnmatch(asset_name, pattern) for asset_name in assets) for pattern in patterns)
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
+              for key, spec in specs.items():
+                  tag = spec["input"]
+                  if not tag:
+                      for release in releases:
+                          if release.get("draft"):
+                              continue
+                          if matches(release, spec["patterns"]):
+                              tag = release["tag_name"]
+                              break
+                  if not tag:
+                      raise SystemExit(f"Could not resolve release tag for {key}")
+                  out.write(f"{key}_tag={tag}\n")
+          PY
+
+      - name: Prepare docs tree
+        run: |
+          set -euo pipefail
+          rm -rf docs/firmware docs/cardputeradv docs/tab5
+          mkdir -p docs/cardputeradv docs/tab5
+          cp -R M5MonsterC5-CardputerADV/docs/. docs/cardputeradv/
+          cp -R M5MonsterC5-Tab5/docs/. docs/tab5/
+          rm -rf docs/cardputeradv/firmware docs/tab5/firmware
+          rm -f docs/cardputeradv/manifest.json docs/cardputeradv/manifest_k132.json docs/tab5/manifest.json docs/manifest.json
+          find docs -name '.DS_Store' -delete
+
+      - name: Download ESP32-C5 release assets
+        id: c5
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.meta.outputs.tag }}
+          RELEASE_TAG: ${{ steps.meta.outputs.c5_tag }}
         run: |
           set -euo pipefail
-          rm -rf docs/firmware
           mkdir -p docs/firmware
-
-          gh release download "$TAG" -R "$GITHUB_REPOSITORY" --dir docs/firmware \
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir docs/firmware \
             --pattern "bootloader.bin" \
             --pattern "partition-table.bin" \
-            --pattern "projectZero*.bin"
-
-          ls -lh docs/firmware
+            --pattern "projectZero.bin" \
+            --pattern "projectZero-*.bin"
 
           if [ ! -f docs/firmware/projectZero.bin ]; then
-            alt=$(ls docs/firmware/projectZero-*.bin 2>/dev/null | head -n1 || true)
+            alt="$(find docs/firmware -maxdepth 1 -type f -name 'projectZero-*.bin' | head -n1 || true)"
             if [ -n "$alt" ]; then
               cp "$alt" docs/firmware/projectZero.bin
             fi
@@ -78,20 +140,182 @@ jobs:
 
           for f in bootloader.bin partition-table.bin projectZero.bin; do
             if [ ! -f "docs/firmware/$f" ]; then
-              echo "Missing $f in release assets for tag ${TAG}" >&2
+              echo "Missing $f for tag ${RELEASE_TAG}" >&2
               exit 1
             fi
           done
 
-      - name: Build manifest.json
+          fw_version="$(find docs/firmware -maxdepth 1 -type f -name 'projectZero-*.bin' | head -n1 | xargs -n1 basename | sed -E 's/^projectZero-([^.]*)\.bin$/\1/')"
+          if [ -z "$fw_version" ]; then
+            fw_version="${RELEASE_TAG}"
+          fi
+          echo "version=$fw_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build ESP32-C5 manifest
         env:
-          TAG: ${{ steps.meta.outputs.tag }}
+          FW_VERSION: ${{ steps.c5.outputs.version }}
+          BUILD_TAG: ${{ steps.meta.outputs.c5_tag }}
         run: |
           set -euo pipefail
-          python -c "import os, json; from pathlib import Path; tag=os.getenv('TAG','manual'); manifest={'name':'projectZero ESP32-C5','version':tag,'build':tag,'chipFamily':'ESP32-C5','parts':[{'path':'firmware/bootloader.bin','offset':8192},{'path':'firmware/partition-table.bin','offset':32768},{'path':'firmware/projectZero.bin','offset':131072},{'path':'firmware/projectZero.bin','offset':4259840}]}; Path('docs/manifest.json').write_text(json.dumps(manifest, indent=2) + '\\n')"
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.getenv("FW_VERSION") or os.getenv("BUILD_TAG")
+          build = os.getenv("BUILD_TAG") or "manual"
+          manifest = {
+              "name": "projectZero ESP32-C5",
+              "version": version,
+              "build": build,
+              "chipFamily": "ESP32-C5",
+              "parts": [
+                  {"path": "firmware/bootloader.bin", "offset": 8192},
+                  {"path": "firmware/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/projectZero.bin", "offset": 131072},
+                  {"path": "firmware/projectZero.bin", "offset": 4259840},
+              ],
+          }
+          Path("docs/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Download Cardputer release assets
+        id: s3
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.s3_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/cardputeradv/firmware/tmp docs/cardputeradv/firmware/adv docs/cardputeradv/firmware/k132
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir docs/cardputeradv/firmware/tmp \
+            --pattern "bootloader-adv.bin" \
+            --pattern "partition-table-adv.bin" \
+            --pattern "M5MonsterC5-CardputerADV-adv*.bin" \
+            --pattern "bootloader-k132.bin" \
+            --pattern "partition-table-k132.bin" \
+            --pattern "M5MonsterC5-CardputerADV-k132*.bin"
+
+          cp docs/cardputeradv/firmware/tmp/bootloader-adv.bin docs/cardputeradv/firmware/adv/bootloader.bin
+          cp docs/cardputeradv/firmware/tmp/partition-table-adv.bin docs/cardputeradv/firmware/adv/partition-table.bin
+          cp docs/cardputeradv/firmware/tmp/M5MonsterC5-CardputerADV-adv.bin docs/cardputeradv/firmware/adv/M5MonsterC5-CardputerADV.bin
+          cp docs/cardputeradv/firmware/tmp/bootloader-k132.bin docs/cardputeradv/firmware/k132/bootloader.bin
+          cp docs/cardputeradv/firmware/tmp/partition-table-k132.bin docs/cardputeradv/firmware/k132/partition-table.bin
+          cp docs/cardputeradv/firmware/tmp/M5MonsterC5-CardputerADV-k132.bin docs/cardputeradv/firmware/k132/M5MonsterC5-CardputerADV.bin
+
+          for board in adv k132; do
+            for f in bootloader.bin partition-table.bin M5MonsterC5-CardputerADV.bin; do
+              if [ ! -f "docs/cardputeradv/firmware/${board}/$f" ]; then
+                echo "Missing ${board}/$f for tag ${RELEASE_TAG}" >&2
+                exit 1
+              fi
+            done
+          done
+
+          candidate="$(find docs/cardputeradv/firmware/tmp -maxdepth 1 -type f -name 'M5MonsterC5-CardputerADV-adv-*.bin' ! -name '*-full-*' ! -name '*-launcher-*' | head -n1 || true)"
+          fw_version="$(printf '%s' "$candidate" | xargs -r -n1 basename | sed -E 's/^M5MonsterC5-CardputerADV-adv-([^.]*)\.bin$/\1/')"
+          if [ -z "$fw_version" ]; then
+            fw_version="${RELEASE_TAG}"
+          fi
+          echo "version=$fw_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build Cardputer manifests
+        env:
+          FW_VERSION: ${{ steps.s3.outputs.version }}
+          BUILD_TAG: ${{ steps.meta.outputs.s3_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.getenv("FW_VERSION") or os.getenv("BUILD_TAG")
+          build = os.getenv("BUILD_TAG") or "manual"
+          base = {"version": version, "build": build, "chipFamily": "ESP32-S3"}
+          adv = {
+              "name": "M5MonsterC5-CardputerADV ESP32-S3 (ADV)",
+              "parts": [
+                  {"path": "firmware/adv/bootloader.bin", "offset": 0},
+                  {"path": "firmware/adv/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/adv/M5MonsterC5-CardputerADV.bin", "offset": 65536},
+              ],
+          }
+          k132 = {
+              "name": "M5MonsterC5-CardputerADV ESP32-S3 (K132)",
+              "parts": [
+                  {"path": "firmware/k132/bootloader.bin", "offset": 0},
+                  {"path": "firmware/k132/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/k132/M5MonsterC5-CardputerADV.bin", "offset": 65536},
+              ],
+          }
+          Path("docs/cardputeradv/manifest.json").write_text(json.dumps({**base, **adv}, indent=2) + "\n", encoding="utf-8")
+          Path("docs/cardputeradv/manifest_k132.json").write_text(json.dumps({**base, **k132}, indent=2) + "\n", encoding="utf-8")
+          PY
+
+      - name: Download Tab5 release assets
+        id: p4
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.p4_tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p docs/tab5/firmware
+          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir docs/tab5/firmware \
+            --pattern "bootloader.bin" \
+            --pattern "partition-table.bin" \
+            --pattern "M5MonsterC5-Tab5.bin" \
+            --pattern "M5MonsterC5-Tab5-*.bin"
+
+          if [ ! -f docs/tab5/firmware/M5MonsterC5-Tab5.bin ]; then
+            alt="$(find docs/tab5/firmware -maxdepth 1 -type f -name 'M5MonsterC5-Tab5-*.bin' ! -name '*-full*' | head -n1 || true)"
+            if [ -n "$alt" ]; then
+              cp "$alt" docs/tab5/firmware/M5MonsterC5-Tab5.bin
+            fi
+          fi
+
+          for f in bootloader.bin partition-table.bin M5MonsterC5-Tab5.bin; do
+            if [ ! -f "docs/tab5/firmware/$f" ]; then
+              echo "Missing $f for tag ${RELEASE_TAG}" >&2
+              exit 1
+            fi
+          done
+
+          candidate="$(find docs/tab5/firmware -maxdepth 1 -type f -name 'M5MonsterC5-Tab5-*.bin' ! -name '*-full*' | head -n1 || true)"
+          fw_version="$(printf '%s' "$candidate" | xargs -r -n1 basename | sed -E 's/^M5MonsterC5-Tab5-([^.]*)\.bin$/\1/')"
+          if [ -z "$fw_version" ]; then
+            fw_version="${RELEASE_TAG}"
+          fi
+          echo "version=$fw_version" >> "$GITHUB_OUTPUT"
+
+      - name: Build Tab5 manifest
+        env:
+          FW_VERSION: ${{ steps.p4.outputs.version }}
+          BUILD_TAG: ${{ steps.meta.outputs.p4_tag }}
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          version = os.getenv("FW_VERSION") or os.getenv("BUILD_TAG")
+          build = os.getenv("BUILD_TAG") or "manual"
+          manifest = {
+              "name": "M5MonsterC5-Tab5 ESP32-P4",
+              "version": version,
+              "build": build,
+              "chipFamily": "ESP32-P4",
+              "parts": [
+                  {"path": "firmware/bootloader.bin", "offset": 8192},
+                  {"path": "firmware/partition-table.bin", "offset": 32768},
+                  {"path": "firmware/M5MonsterC5-Tab5.bin", "offset": 65536},
+              ],
+          }
+          Path("docs/tab5/manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+          PY
 
       - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
+        uses: actions/upload-pages-artifact@v4
         with:
           path: docs
 

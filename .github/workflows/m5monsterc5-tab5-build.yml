@@ -1,0 +1,225 @@
+name: M5MonsterC5 Tab5 Build (ESP32-P4)
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Optional tag name to upload assets to a release (example 'tab5-v1.2.1')"
+        required: false
+  push:
+    branches: [main, master]
+    paths:
+      - 'M5MonsterC5-Tab5/**'
+      - '.github/workflows/m5monsterc5-tab5-build.yml'
+
+jobs:
+  firmware:
+    name: M5MonsterC5-Tab5
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    container:
+      image: espressif/idf:v5.4.1
+    outputs:
+      fw_version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Cache ESP-IDF artifacts
+        uses: actions/cache@v4
+        with:
+          path: /root/.espressif
+          key: espidf-5.4.1-${{ runner.os }}-${{ hashFiles('M5MonsterC5-Tab5/sdkconfig', 'M5MonsterC5-Tab5/dependencies.lock') }}
+          restore-keys: |
+            espidf-5.4.1-${{ runner.os }}-
+            espidf-5.4.1-
+
+      - name: Build firmware
+        run: bash M5MonsterC5-Tab5/.github/scripts/container_build.sh --no-docker
+
+      - name: Stamp firmware with JANOS_TAB_VERSION
+        id: version
+        run: |
+          set -euo pipefail
+          version=$(python - <<'PY'
+          from pathlib import Path
+          import re
+          text = Path("M5MonsterC5-Tab5/main/main.c").read_text(encoding="utf-8")
+          match = re.search(r'JANOS_TAB_VERSION\s*"([^"]+)"', text)
+          if not match:
+              raise SystemExit("JANOS_TAB_VERSION not found")
+          print(match.group(1))
+          PY
+          )
+          src="M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5.bin"
+          dst="M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-${version}.bin"
+          if [ ! -f "$src" ]; then
+            echo "Missing firmware: $src" >&2
+            exit 1
+          fi
+          cp "$src" "$dst"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Merge full flash image
+        run: |
+          set -euo pipefail
+          if ! python3 -c "import venv" >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y python3-venv
+          fi
+          python3 -m venv /tmp/esptool-venv
+          /tmp/esptool-venv/bin/python -m pip install --no-cache-dir esptool
+          /tmp/esptool-venv/bin/python -m esptool --chip esp32p4 merge_bin \
+            -o "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
+            --flash_mode dio --flash_freq 80m --flash_size 16MB \
+            0x2000 "M5MonsterC5-Tab5/binaries-esp32p4/bootloader.bin" \
+            0x8000 "M5MonsterC5-Tab5/binaries-esp32p4/partition-table.bin" \
+            0x10000 "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5.bin"
+          cp "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
+            "M5MonsterC5-Tab5/binaries-esp32p4/M5MonsterC5-Tab5-full.bin"
+
+      - name: Package firmware zip
+        run: |
+          set -euo pipefail
+          cd M5MonsterC5-Tab5/binaries-esp32p4
+          out="M5MonsterC5-Tab5-${{ steps.version.outputs.version }}.zip"
+          rm -f "$out"
+          zip -9 "$out" \
+            bootloader.bin \
+            partition-table.bin \
+            flash_board.py \
+            M5MonsterC5-Tab5-full.bin \
+            "M5MonsterC5-Tab5-full-${{ steps.version.outputs.version }}.bin" \
+            "M5MonsterC5-Tab5-${{ steps.version.outputs.version }}.bin" \
+            M5MonsterC5-Tab5.bin
+
+      - name: Upload firmware artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: esp32p4-firmware
+          path: M5MonsterC5-Tab5/binaries-esp32p4
+          if-no-files-found: error
+
+  release:
+    name: Release
+    needs: [firmware]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    if: github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.release_tag }}
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="tab5-v${FW_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "Using tag: $TAG"
+
+      - name: Download firmware artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: esp32p4-firmware
+          path: release_artifacts/firmware
+
+      - name: Build bundle
+        run: |
+          set -euo pipefail
+          cd release_artifacts
+          mkdir -p bundle
+          FW_VERSION="${{ needs.firmware.outputs.fw_version }}"
+          zip -9 "bundle/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip" \
+            firmware/bootloader.bin \
+            firmware/partition-table.bin \
+            firmware/flash_board.py \
+            firmware/M5MonsterC5-Tab5-full.bin \
+            "firmware/M5MonsterC5-Tab5-full-${FW_VERSION}.bin" \
+            firmware/M5MonsterC5-Tab5.bin \
+            "firmware/M5MonsterC5-Tab5-${FW_VERSION}.bin" \
+            "firmware/M5MonsterC5-Tab5-${FW_VERSION}.zip"
+
+      - name: Build release notes
+        env:
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          PAGES_LINK="https://${REPO%/*}.github.io/${REPO#*/}/tab5/"
+          {
+            printf '%s\n\n' "Release ${TAG} published."
+            printf '%s\n' "Web flasher: ${PAGES_LINK}"
+            printf '%s\n' "Firmware ZIP: ${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}.zip"
+            printf '%s\n' "Bundle: ${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="M5MonsterC5 Tab5 ${FW_VERSION}"
+          files=(
+            release_artifacts/firmware/bootloader.bin
+            release_artifacts/firmware/partition-table.bin
+            release_artifacts/firmware/flash_board.py
+            release_artifacts/firmware/M5MonsterC5-Tab5-full.bin
+            "release_artifacts/firmware/M5MonsterC5-Tab5-full-${FW_VERSION}.bin"
+            release_artifacts/firmware/M5MonsterC5-Tab5.bin
+            "release_artifacts/firmware/M5MonsterC5-Tab5-${FW_VERSION}.bin"
+            "release_artifacts/firmware/M5MonsterC5-Tab5-${FW_VERSION}.zip"
+            "release_artifacts/bundle/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          )
+
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+
+          gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"
+
+  discord:
+    name: Discord
+    needs: [release, firmware]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        if: success()
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ inputs.release_tag || format('tab5-v{0}', needs.firmware.outputs.fw_version) }}
+          REPO: ${{ github.repository }}
+          PAGES_URL: ${{ format('https://{0}.github.io/{1}/tab5/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG:-tab5-v${FW_VERSION}}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          content=$(
+            printf '%s\n' \
+              "M5MonsterC5 Tab5" \
+              "Release ${TAG} published." \
+              "Web flasher:" \
+              "${PAGES_URL}" \
+              "Firmware ZIP:" \
+              "${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}.zip" \
+              "Bundle:" \
+              "${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"

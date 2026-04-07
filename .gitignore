@@ -1,5 +1,10 @@
-ESP32C5/.vscode/settings.json
-ESP32C5/.clangd
+JanOS/.vscode/settings.json
+JanOS/.clangd
 .vscode/
-ESP32C5/.vscode/settings.json
-ESP32C5/managed_components/
+JanOS/managed_components/
+**/.DS_Store
+**/__pycache__/
+**/*.pyc
+**/.agents/
+**/.clangd
+**/.flash-venv/

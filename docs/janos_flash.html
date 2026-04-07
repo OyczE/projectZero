@@ -378,7 +378,7 @@
         </div>
         <div class="card">
           <h2>Need offline-</h2>
-          <p>Grab the same assets from Releases and run <code>flash_board.py</code> in <code>ESP32C5/binaries-esp32c5</code> if your browser blocks Web Serial.</p>
+          <p>Grab the same assets from Releases and run <code>flash_board.py</code> in <code>JanOS/binaries-esp32c5</code> if your browser blocks Web Serial.</p>
         </div>
         <div class="card">
           <h2>Browser support</h2>
@@ -550,7 +550,7 @@
         }
       })();
       if (manifestHost === "raw.githubusercontent.com" && cleaned.startsWith("firmware/")) {
-        cleaned = cleaned.replace(/^firmware\//, "ESP32C5/binaries-esp32c5/");
+        cleaned = cleaned.replace(/^firmware\//, "JanOS/binaries-esp32c5/");
         return `https://raw.githubusercontent.com/C5Lab/projectZero/${branch}/${cleaned}`;
       }
       return new URL(cleaned, manifestUrl).toString();

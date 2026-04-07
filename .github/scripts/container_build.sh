@@ -7,14 +7,14 @@ USE_DOCKER="${USE_DOCKER:-1}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # go two levels up: .github/scripts -> repo root
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
-APP_DIR="${REPO_ROOT}/ESP32C5"
+APP_DIR="${REPO_ROOT}/JanOS"
 CACHE_DIR="${IDF_CACHE_DIR:-${REPO_ROOT}/.espressif}"
 
 usage() {
   cat <<'EOF'
 Usage: container_build.sh [--no-docker]
 
-Builds ESP32C5 firmware using esp-idf release/v6.0.
+Builds JanOS firmware for ESP32-C5 using esp-idf release/v6.0.
 Defaults to running inside Docker (espressif/idf:v6.0-beta1).
 
 Options:
