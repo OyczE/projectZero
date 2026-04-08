@@ -148,8 +148,8 @@
   <div class="container">
     <header>
       <div class="eyebrow">projectZero  Flipper Zero</div>
-      <h1>Upload Lab_C5.fap from your browser</h1>
-      <p>WebSerial uploader that speaks Flipper CLI <code>storage</code>. Connect the device, pick a .fap (or fetch latest), then hit Upload.</p>
+      <h1>Update Flipper apps from your browser</h1>
+      <p>One WebSerial uploader for both projectZero Flipper apps. Pick <strong>Normal</strong> for Lab_C5 or <strong>Lite</strong> for FlipperLight, choose the firmware track, then upload over Flipper CLI <code>storage</code>.</p>
     </header>
 
     <div class="split">
@@ -172,12 +172,21 @@
           </label>
           <div class="row">
             <div class="select-wrap">
+              <label for="appSelect">App</label>
+              <select id="appSelect">
+                <option value="labc5" selected>Normal (Lab_C5)</option>
+                <option value="lite">Lite (FlipperLight)</option>
+              </select>
+            </div>
+            <div class="select-wrap">
               <label for="branchSelect">Branch</label>
               <select id="branchSelect">
                 <option value="main" selected>Main</option>
                 <option value="development">Development</option>
               </select>
             </div>
+          </div>
+          <div class="row">
             <div class="select-wrap">
               <label for="trackSelect">Firmware track</label>
               <select id="trackSelect">
@@ -207,7 +216,8 @@
         <p><span class="badge">CLI mode</span> Flipper must expose CDC/CLI (Settings -> Power -> USB mode -> CDC; you should see the <code>>:</code> prompt). WebSerial works in Chrome/Edge on desktop; HTTPS or localhost is required.</p>
         <ul class="steps">
           <li>Connect: click Connect and pick the Flipper CDC port.</li>
-          <li>Select a local .fap or fetch the latest Unleashed/Momentum release asset, confirm the target path.</li>
+          <li>Select Normal or Lite, then choose the Git branch and target firmware track.</li>
+          <li>The page fetches the newest matching .fap from the proper release stream or branch dist folder and updates the target path for you.</li>
           <li>Upload: the page streams <code>storage write_chunk</code> in 8 KB pieces and waits for the prompt every time.</li>
           <li>After upload the app appears under Applications -> External; launch manually if needed.</li>
         </ul>
@@ -223,6 +233,7 @@
       connectBtn: document.getElementById("connectBtn"),
       uploadBtn: document.getElementById("uploadBtn"),
       destPath: document.getElementById("destPath"),
+      appSelect: document.getElementById("appSelect"),
       branchSelect: document.getElementById("branchSelect"),
       trackSelect: document.getElementById("trackSelect"),
       runAfter: document.getElementById("runAfter"),
@@ -248,8 +259,43 @@
       autoUploadTriggered: false,
     };
 
+    const APP_CONFIGS = {
+      labc5: {
+        label: "Normal",
+        title: "Lab_C5",
+        distPath: "FLIPPER/dist",
+        defaultDest: "/ext/apps/lab_c5.fap",
+        rawName: "lab_c5.fap",
+        prefix: /^lab_c5/i,
+        family: /^lab_c5.*\.fap$/i,
+      },
+      lite: {
+        label: "Lite",
+        title: "FlipperLight",
+        distPath: "FlipperLight/dist",
+        defaultDest: "/ext/apps/c5lab_dev.fap",
+        rawName: "c5lab_dev.fap",
+        prefix: /^c5lab_dev/i,
+        family: /^c5lab_dev.*\.fap$/i,
+      },
+    };
+
+    const getAppKey = () => ui.appSelect.value || "labc5";
+    const getAppConfig = (appKey = getAppKey()) => APP_CONFIGS[appKey] || APP_CONFIGS.labc5;
+    const defaultDestinations = Object.values(APP_CONFIGS).map((config) => config.defaultDest);
+
     const applyQueryParams = () => {
       const params = new URLSearchParams(window.location.search);
+      const app = params.get("app") || params.get("variant") || params.get("edition") || params.get("mode");
+      if(app) {
+        const normalized = app.trim().toLowerCase();
+        if(normalized === "lite" || normalized === "flipperlight" || normalized === "light") {
+          ui.appSelect.value = "lite";
+        } else if(normalized === "labc5" || normalized === "normal" || normalized === "full") {
+          ui.appSelect.value = "labc5";
+        }
+      }
+
       const branch = params.get("branch");
       if(branch) {
         const normalized = branch.trim().toLowerCase();
@@ -430,6 +476,7 @@
     };
 
     const setSelectedFile = (name, data) => {
+      const appConfig = getAppConfig();
       const prevName = state.lastFileName || state.fileName;
       state.fileName = name;
       state.fileData = data;
@@ -437,7 +484,9 @@
       setFileInfo(name, data?.length || 0);
       const current = ui.destPath.value.trim();
       const prevPath = prevName ? `/ext/apps/${prevName}` : "";
-      if (!current || current === "/ext/apps/lab_c5.fap" || (prevPath && current === prevPath)) {
+      if (!current || defaultDestinations.includes(current) || (prevPath && current === prevPath)) {
+        ui.destPath.value = `/ext/apps/${name}`;
+      } else if (current === appConfig.defaultDest) {
         ui.destPath.value = `/ext/apps/${name}`;
       }
       if(state.autoUpload && state.connected && !state.autoUploadTriggered) {
@@ -446,14 +495,14 @@
       }
     };
 
-    const fetchFirstAvailable = async (urls) => {
+    const fetchFirstAvailable = async (urls, fallbackName = "download.fap") => {
       let lastErr;
       for (const url of urls) {
         try {
           const res = await fetch(url, { headers: { Accept: "application/octet-stream" }, cache: "no-store", redirect: "follow" });
           if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
           const buf = new Uint8Array(await res.arrayBuffer());
-          const name = url.split("/").pop() || "lab_c5.fap";
+          const name = url.split("/").pop() || fallbackName;
           return { name, buf };
         } catch (err) {
           lastErr = err;
@@ -463,64 +512,93 @@
     };
 
     const getBranch = () => ui.branchSelect.value || "main";
-
-    const trackMatchesName = (name, track) => {
-      const lower = name.toLowerCase();
-      if (track === "momentum_dev") {
-        return /momentum[-_ ]dev/.test(lower);
-      }
-      if (track === "momentum") {
-        return lower.includes("momentum") && !/momentum[-_ ]dev/.test(lower);
-      }
-      return lower.includes(track);
+    const matchesAppName = (name, appKey) => {
+      const config = getAppConfig(appKey);
+      return config.prefix.test((name || "").toLowerCase());
     };
 
-    const pickLatestFromList = (files, track) => {
-      const candidates = files.filter((f) => f.name && trackMatchesName(f.name, track) && f.name.toLowerCase().endsWith(".fap"));
-      if (!candidates.length) return null;
-      const sorted = candidates.sort((a, b) => {
+    const classifyTrack = (name) => {
+      const lower = (name || "").toLowerCase();
+      if (/momentum[-_ ]?dev/.test(lower)) return "momentum_dev";
+      if (lower.includes("momentum")) return "momentum";
+      if (lower.includes("unleashed")) return "unleashed";
+      return null;
+    };
+
+    const trackMatchesName = (name, track) => {
+      return classifyTrack(name) === track;
+    };
+
+    const pickBestCandidate = (files) => {
+      if (!files.length) return null;
+      const sorted = files.sort((a, b) => {
         const av = parseVersion(a.name).version || [];
         const bv = parseVersion(b.name).version || [];
-        return compareVersions(bv, av);
+        const versionCmp = compareVersions(bv, av);
+        if (versionCmp !== 0) return versionCmp;
+        return String(b.name || "").localeCompare(String(a.name || ""));
       });
       return sorted[0];
     };
 
-    const fetchFromRelease = async (track) => {
-      const apiUrl = "https://api.github.com/repos/C5Lab/projectZero/releases/latest";
-      const res = await fetch(apiUrl, { cache: "no-store", headers: { Accept: "application/vnd.github+json" } });
-      if (!res.ok) throw new Error(`GitHub API failed: ${res.status} ${res.statusText}`);
-      const release = await res.json();
-      const asset = (release.assets || []).find((a) => a.name && trackMatchesName(a.name, track) && a.name.endsWith(".fap"));
-      if (!asset) throw new Error(`No .fap asset for ${track} found in latest release`);
-      const browserUrl = asset.browser_download_url || asset.url;
-      const rawFallback = `https://raw.githubusercontent.com/C5Lab/projectZero/main/FLIPPER/dist/${asset.name}`;
-      return fetchFirstAvailable([rawFallback, browserUrl]);
+    const pickLatestFromList = (files, appKey, track) => {
+      const base = files.filter((f) => f.name && f.name.toLowerCase().endsWith(".fap") && matchesAppName(f.name, appKey));
+      const tracked = base.filter((f) => trackMatchesName(f.name, track));
+      return pickBestCandidate(tracked.length ? tracked : base);
     };
 
-    const fetchFromBranch = async (track, branch) => {
-      const apiUrl = `https://api.github.com/repos/C5Lab/projectZero/contents/FLIPPER/dist?ref=${branch}`;
+    const fetchFromRelease = async (appKey, track) => {
+      const config = getAppConfig(appKey);
+      const apiUrl = "https://api.github.com/repos/C5Lab/projectZero/releases?per_page=100";
+      const res = await fetch(apiUrl, { cache: "no-store", headers: { Accept: "application/vnd.github+json" } });
+      if (!res.ok) throw new Error(`GitHub API failed: ${res.status} ${res.statusText}`);
+      const releases = await res.json();
+      const candidates = [];
+      for (const release of releases || []) {
+        if (release?.draft) continue;
+        for (const asset of release.assets || []) {
+          if (!asset?.name || !asset.name.toLowerCase().endsWith(".fap")) continue;
+          if (!matchesAppName(asset.name, appKey)) continue;
+          candidates.push({
+            ...asset,
+            published_at: release.published_at || release.created_at || "",
+          });
+        }
+      }
+      const tracked = candidates.filter((asset) => trackMatchesName(asset.name, track));
+      const asset = pickBestCandidate(tracked.length ? tracked : candidates);
+      if (!asset) throw new Error(`No ${config.title} .fap asset for ${track} found in releases`);
+      const browserUrl = asset.browser_download_url || asset.url;
+      const rawFallback = `https://raw.githubusercontent.com/C5Lab/projectZero/main/${config.distPath}/${asset.name}`;
+      return fetchFirstAvailable([browserUrl, rawFallback], config.rawName);
+    };
+
+    const fetchFromBranch = async (appKey, track, branch) => {
+      const config = getAppConfig(appKey);
+      const apiUrl = `https://api.github.com/repos/C5Lab/projectZero/contents/${config.distPath}?ref=${branch}`;
       const res = await fetch(apiUrl, { cache: "no-store", headers: { Accept: "application/vnd.github+json" } });
       if (!res.ok) throw new Error(`GitHub API failed: ${res.status} ${res.statusText}`);
       const files = await res.json();
-      const pick = pickLatestFromList(files || [], track);
-      if (!pick || !pick.path) throw new Error(`No .fap asset for ${track} found in ${branch} branch`);
+      const pick = pickLatestFromList(files || [], appKey, track);
+      if (!pick || !pick.path) throw new Error(`No ${config.title} .fap asset for ${track} found in ${branch} branch`);
       const rawUrl = `https://raw.githubusercontent.com/C5Lab/projectZero/${branch}/${pick.path}`;
       const fileRes = await fetch(rawUrl, { cache: "no-store", headers: { Accept: "application/octet-stream" } });
       if (!fileRes.ok) throw new Error(`Download failed: ${fileRes.status} ${fileRes.statusText}`);
       const buf = new Uint8Array(await fileRes.arrayBuffer());
-      return { name: pick.name || "lab_c5.fap", buf };
+      return { name: pick.name || config.rawName, buf };
     };
 
     const fetchLatest = async () => {
+      const appKey = getAppKey();
+      const appConfig = getAppConfig(appKey);
       const track = ui.trackSelect.value;
       const branch = getBranch();
-      setStatus(`Fetching ${track} (${branch}) .fap ...`);
-      log(`Fetch ${track} from ${branch}`);
+      setStatus(`Fetching ${appConfig.label} / ${track} (${branch}) .fap ...`);
+      log(`Fetch ${appConfig.title} ${track} from ${branch}`);
       try {
         const { name, buf } = branch === "main"
-          ? await fetchFromRelease(track)
-          : await fetchFromBranch(track, branch);
+          ? await fetchFromRelease(appKey, track)
+          : await fetchFromBranch(appKey, track, branch);
         setSelectedFile(name, buf);
         setStatus(`Ready to upload ${name}`);
         log(`Fetched ${name} (${buf.length} bytes)`);
@@ -531,10 +609,10 @@
     };
 
     const parseVersion = (name) => {
-      const m = name.match(/lab_c5_v(\d+(?:\.\d+)*).*?(unleashed|momentum)/i);
-      if (!m) return { version: null, track: null };
-      const version = m[1].split(".").map((n) => parseInt(n, 10));
-      return { version, track: m[2].toLowerCase() };
+      const match = (name || "").match(/_v(\d+(?:\.\d+)*)(?:_|\.fap)/i);
+      if (!match) return { version: null, track: classifyTrack(name) };
+      const version = match[1].split(".").map((n) => parseInt(n, 10));
+      return { version, track: classifyTrack(name) };
     };
 
     const compareVersions = (a, b) => {
@@ -562,10 +640,11 @@
     };
 
     const maybeDeleteConflicts = async () => {
+      const appConfig = getAppConfig();
       const files = await listApps();
-      const conflicts = files.filter((f) => /^lab_c5_.*\.fap$/i.test(f) && f !== state.fileName);
+      const conflicts = files.filter((f) => appConfig.family.test(f) && f !== state.fileName);
       if (!conflicts.length) return;
-      const confirmDelete = window.confirm(`Found existing lab_c5*.fap on device: ${conflicts.join(", ")}. Delete them before upload?`);
+      const confirmDelete = window.confirm(`Found existing ${appConfig.title} app files on device: ${conflicts.join(", ")}. Delete them before upload?`);
       if (!confirmDelete) return;
       for (const fname of conflicts) {
         try {
@@ -580,22 +659,25 @@
     };
 
     const maybeDeleteOld = async () => {
+      const appConfig = getAppConfig();
       const selected = parseVersion(state.fileName || "");
       if (!selected.track) return;
       const files = await listApps();
-      const candidate = files.find((f) => f.toLowerCase().includes(selected.track) && f.toLowerCase().startsWith("lab_c5_v0."));
-      if (!candidate) return;
-      if (candidate === state.fileName) return;
-      const found = parseVersion(candidate);
-      if (!found.version) return;
       if (!selected.version) return;
-      if (compareVersions(found.version, selected.version) >= 0) return;
-      const confirmDelete = window.confirm(`Found older ${candidate} on device. Delete it before upload?`);
+      const candidates = files.filter((f) => appConfig.family.test(f) && f !== state.fileName && classifyTrack(f) === selected.track);
+      const older = candidates.filter((candidate) => {
+        const found = parseVersion(candidate);
+        return found.version && compareVersions(found.version, selected.version) < 0;
+      });
+      if (!older.length) return;
+      const confirmDelete = window.confirm(`Found older ${appConfig.title} ${selected.track} builds on device: ${older.join(", ")}. Delete them before upload?`);
       if (confirmDelete) {
-        await sendText(`storage remove "/ext/apps/${candidate}"\r`);
-        await readUntil("\r\n");
-        await waitForPrompt();
-        log(`Deleted old ${candidate}`);
+        for (const candidate of older) {
+          await sendText(`storage remove "/ext/apps/${candidate}"\r`);
+          await readUntil("\r\n");
+          await waitForPrompt();
+          log(`Deleted old ${candidate}`);
+        }
       }
     };
 
@@ -673,6 +755,14 @@
 
     ui.connectBtn.addEventListener("click", () => connect().catch(() => {}));
     ui.uploadBtn.addEventListener("click", () => upload().catch(() => {}));
+    ui.appSelect.addEventListener("change", () => {
+      state.lastFileName = state.fileName;
+      state.fileData = null;
+      state.fileName = null;
+      ui.destPath.value = getAppConfig().defaultDest;
+      setFileInfo("", 0);
+      fetchLatest().catch(() => {});
+    });
     ui.trackSelect.addEventListener("change", () => {
       state.lastFileName = state.fileName;
       state.fileData = null;
