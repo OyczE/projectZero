@@ -177,14 +177,21 @@ jobs:
             fh.write(f"light_version={version.group(1)}\n")
           PY
 
-      - name: Upload FAP artifacts
-        if: ${{ hashFiles('FLIPPER/dist/*.fap', 'FlipperLight/dist/*.fap') != '' }}
+      - name: Upload Lab_C5 artifacts
+        if: ${{ hashFiles('FLIPPER/dist/*.fap') != '' }}
         uses: actions/upload-artifact@v6
         with:
-          name: flipper-fap
-          path: |
-            FLIPPER/dist/*.fap
-            FlipperLight/dist/*.fap
+          name: labc5-fap
+          path: FLIPPER/dist/*.fap
+          if-no-files-found: error
+
+      - name: Upload FlipperLight artifacts
+        if: ${{ hashFiles('FlipperLight/dist/*.fap') != '' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: flipperlight-fap
+          path: FlipperLight/dist/*.fap
+          if-no-files-found: error
 
   release:
     name: Release JanOS
@@ -317,9 +324,8 @@ jobs:
       - name: Download FAP artifacts
         uses: actions/download-artifact@v6
         with:
-          name: flipper-fap
+          name: labc5-fap
           path: release_artifacts/fap
-          merge-multiple: true
 
       - name: Package Lab_C5 bundle
         env:
@@ -329,6 +335,9 @@ jobs:
           cd release_artifacts/fap
           shopt -s nullglob
           files=(lab_c5_v"${FAP_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            files=(lab_c5*.fap)
+          fi
           if [ ${#files[@]} -eq 0 ]; then
             echo "No Lab_C5 FAPs found for version ${FAP_VERSION}" >&2
             exit 1
@@ -359,10 +368,15 @@ jobs:
           TAG="${RELEASE_TAG}"
           NAME="Lab_C5 FAP ${FAP_VERSION}"
           shopt -s nullglob
-          files=(
-            release_artifacts/fap/lab_c5_v"${FAP_VERSION}"_*.fap
-            "release_artifacts/fap/lab_c5-${FAP_VERSION}-bundle.zip"
-          )
+          files=(release_artifacts/fap/lab_c5_v"${FAP_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            files=(release_artifacts/fap/lab_c5*.fap)
+          fi
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No Lab_C5 FAP release assets found for version ${FAP_VERSION}" >&2
+            exit 1
+          fi
+          files+=("release_artifacts/fap/lab_c5-${FAP_VERSION}-bundle.zip")
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
           else
@@ -399,9 +413,8 @@ jobs:
       - name: Download FAP artifacts
         uses: actions/download-artifact@v6
         with:
-          name: flipper-fap
+          name: flipperlight-fap
           path: release_artifacts/fap
-          merge-multiple: true
 
       - name: Package FlipperLight bundle
         env:
@@ -412,6 +425,9 @@ jobs:
           cd release_artifacts/fap
           shopt -s nullglob
           files=("${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            files=("${LIGHT_APPID}"*.fap)
+          fi
           if [ ${#files[@]} -eq 0 ]; then
             echo "No FlipperLight FAPs found for ${LIGHT_APPID} ${LIGHT_VERSION}" >&2
             exit 1
@@ -442,10 +458,15 @@ jobs:
           TAG="${RELEASE_TAG}"
           NAME="FlipperLight FAP ${LIGHT_VERSION}"
           shopt -s nullglob
-          files=(
-            release_artifacts/fap/"${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap
-            "release_artifacts/fap/flipperlight-${LIGHT_VERSION}-bundle.zip"
-          )
+          files=(release_artifacts/fap/"${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            files=(release_artifacts/fap/"${LIGHT_APPID}"*.fap)
+          fi
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No FlipperLight FAP release assets found for ${LIGHT_APPID} ${LIGHT_VERSION}" >&2
+            exit 1
+          fi
+          files+=("release_artifacts/fap/flipperlight-${LIGHT_VERSION}-bundle.zip")
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
           else
