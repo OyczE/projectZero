@@ -292,10 +292,13 @@ jobs:
           fi
           TAG="${RELEASE_TAG:-cardputer-v${FW_VERSION}}"
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
           content=$(
             printf '%s\n' \
               "M5MonsterC5 Cardputer" \
               "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
               "Web flasher:" \
               "${PAGES_URL}" \
               "ADV ZIP:" \

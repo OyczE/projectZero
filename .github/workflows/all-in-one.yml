@@ -6,14 +6,17 @@ on:
       janos_tag:
         description: "Optional JanOS release tag (example 'janos-v1.5.7')"
         required: false
+      labc5_tag:
+        description: "Optional Lab_C5 FAP release tag (example 'labc5-v1.6.0')"
+        required: false
+      flipperlight_tag:
+        description: "Optional FlipperLight FAP release tag (example 'flipperlight-v0.0.1')"
+        required: false
       cardputer_tag:
         description: "Optional Cardputer release tag (example 'cardputer-v1.6.0')"
         required: false
       tab5_tag:
         description: "Optional Tab5 release tag (example 'tab5-v1.2.1')"
-        required: false
-      suite_tag:
-        description: "Optional suite release tag (example 'suite-20260407-r120')"
         required: false
   push:
     branches: [main, master]
@@ -45,6 +48,7 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       janos: ${{ steps.detect.outputs.janos }}
+      flipper: ${{ steps.detect.outputs.flipper }}
       cardputer: ${{ steps.detect.outputs.cardputer }}
       tab5: ${{ steps.detect.outputs.tab5 }}
       docs: ${{ steps.detect.outputs.docs }}
@@ -74,11 +78,17 @@ jobs:
           patterns = {
               "janos": [
                   "JanOS/**",
-                  "FLIPPER/**",
-                  "FlipperLight/**",
                   ".github/scripts/**",
                   ".github/workflows/all-in-one.yml",
                   ".github/workflows/esp32c5-build-master.yml",
+                  ".github/workflows/esp32c5-build-release-no-discord.yml",
+              ],
+              "flipper": [
+                  "FLIPPER/**",
+                  "FlipperLight/**",
+                  ".github/workflows/all-in-one.yml",
+                  ".github/workflows/esp32c5-build-master.yml",
+                  ".github/workflows/esp32c5-build-release-no-discord.yml",
               ],
               "cardputer": [
                   "M5MonsterC5-CardputerADV/**",
@@ -192,9 +202,9 @@ jobs:
           if-no-files-found: error
 
   janos_fap:
-    name: Build Flipper FAP
-    needs: [changes, janos_firmware]
-    if: needs.changes.outputs.janos == 'true'
+    name: Build Flipper Apps
+    needs: changes
+    if: needs.changes.outputs.flipper == 'true'
     runs-on: ubuntu-24.04
     outputs:
       fap_version: ${{ steps.fap_version.outputs.fap_version }}
@@ -289,7 +299,7 @@ jobs:
 
   janos_release:
     name: Release JanOS
-    needs: [changes, janos_firmware, janos_fap]
+    needs: [changes, janos_firmware]
     if: needs.changes.outputs.janos == 'true'
     runs-on: ubuntu-24.04
     permissions:
@@ -315,71 +325,25 @@ jobs:
           name: esp32c5-firmware
           path: release_artifacts/firmware
 
-      - name: Download FAP artifacts
-        uses: actions/download-artifact@v4
-        with:
-          name: flipper-fap
-          path: release_artifacts/fap
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Package FAP zip
-        if: ${{ hashFiles('release_artifacts/fap/*.fap') != '' }}
-        run: |
-          set -euo pipefail
-          cd release_artifacts/fap
-          zip -9 "projectZero-faps-${{ needs.janos_fap.outputs.fap_version }}.zip" *.fap
-
-      - name: Package full bundle
-        run: |
-          set -euo pipefail
-          cd release_artifacts
-          mkdir -p bundle
-          FW_VERSION="${{ needs.janos_firmware.outputs.fw_version }}"
-          FAP_VERSION="${{ needs.janos_fap.outputs.fap_version }}"
-          shopt -s nullglob
-          faps=(fap/*.fap)
-          files=(
-            firmware/bootloader.bin
-            firmware/partition-table.bin
-            firmware/flash_board.py
-            firmware/oui_wifi.bin
-            firmware/projectZero.bin
-            "firmware/projectZero-${FW_VERSION}.bin"
-          )
-          if [ -f "firmware/projectZero-${FW_VERSION}.zip" ]; then
-            files+=("firmware/projectZero-${FW_VERSION}.zip")
-          fi
-          if [ ${#faps[@]} -gt 0 ]; then
-            files+=("${faps[@]}")
-          fi
-          out="bundle/projectZero-${FW_VERSION}-with-fap-${FAP_VERSION:-unknown}.zip"
-          zip -9 "$out" "${files[@]}"
-
       - name: Build release notes
         env:
           FW_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
-          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
           REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           TAG="${RELEASE_TAG}"
-          FAP_VER="${FAP_VERSION:-unknown}"
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
           {
             printf '%s\n\n' "Release ${TAG} published."
             printf '%s\n' "Web flasher: https://${REPO%/*}.github.io/${REPO#*/}/"
             printf '%s\n' "JanOS (${FW_VERSION}): ${BASE_URL}/projectZero-${FW_VERSION}.zip"
-            printf '%s\n' "FAP bundle (${FAP_VER}): ${BASE_URL}/projectZero-faps-${FAP_VER}.zip"
-            printf '%s\n' "Full package: ${BASE_URL}/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
           } > release_notes.md
 
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FW_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
-          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
           RELEASE_TAG: ${{ steps.meta.outputs.tag }}
         run: |
           set -euo pipefail
@@ -394,17 +358,6 @@ jobs:
             "release_artifacts/firmware/projectZero-${FW_VERSION}.bin"
             "release_artifacts/firmware/projectZero-${FW_VERSION}.zip"
           )
-          shopt -s nullglob
-          optional=(
-            "release_artifacts/fap/projectZero-faps-${FAP_VERSION}.zip"
-            release_artifacts/bundle/projectZero-*-with-fap-*.zip
-            release_artifacts/fap/*.fap
-          )
-          for file in "${optional[@]}"; do
-            if [ -e "$file" ]; then
-              files+=("$file")
-            fi
-          done
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
           else
@@ -419,6 +372,278 @@ jobs:
             fi
             sleep $((attempt * 5))
           done
+
+  janos_discord:
+    name: Discord JanOS
+    needs: [changes, janos_firmware, janos_release]
+    if: needs.changes.outputs.janos == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          FW_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ needs.janos_release.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+          PAGES_URL: ${{ format('https://{0}.github.io/{1}/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          content=$(
+            printf '%s\n' \
+              "JanOS" \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "Web flasher:" \
+              "${PAGES_URL}" \
+              "Firmware ZIP:" \
+              "${BASE_URL}/projectZero-${FW_VERSION}.zip"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
+
+  labc5_release:
+    name: Release Lab_C5 FAP
+    needs: [changes, janos_fap]
+    if: needs.changes.outputs.flipper == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.labc5_tag }}
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="labc5-v${FAP_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download FAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flipper-fap
+          path: release_artifacts/fap
+          merge-multiple: true
+
+      - name: Package Lab_C5 bundle
+        env:
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+        run: |
+          set -euo pipefail
+          cd release_artifacts/fap
+          shopt -s nullglob
+          files=(lab_c5_v"${FAP_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No Lab_C5 FAPs found for version ${FAP_VERSION}" >&2
+            exit 1
+          fi
+          zip -9 "lab_c5-${FAP_VERSION}-bundle.zip" "${files[@]}"
+
+      - name: Build release notes
+        env:
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          BASE_URL="https://github.com/$REPO/releases/download/${RELEASE_TAG}"
+          {
+            printf '%s\n\n' "Release ${RELEASE_TAG} published."
+            printf '%s\n' "Uploader: https://${REPO%/*}.github.io/${REPO#*/}/flipper_fap.html"
+            printf '%s\n' "Bundle: ${BASE_URL}/lab_c5-${FAP_VERSION}-bundle.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="Lab_C5 FAP ${FAP_VERSION}"
+          shopt -s nullglob
+          files=(
+            release_artifacts/fap/lab_c5_v"${FAP_VERSION}"_*.fap
+            "release_artifacts/fap/lab_c5-${FAP_VERSION}-bundle.zip"
+          )
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  labc5_discord:
+    name: Discord Lab_C5 FAP
+    needs: [changes, janos_fap, labc5_release]
+    if: needs.changes.outputs.flipper == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          FAP_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ inputs.labc5_tag || format('labc5-v{0}', needs.janos_fap.outputs.fap_version) }}
+          REPO: ${{ github.repository }}
+          UPLOADER_URL: ${{ format('https://{0}.github.io/{1}/flipper_fap.html', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          content=$(
+            printf '%s\n' \
+              "Lab_C5 FAP" \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "Uploader:" \
+              "${UPLOADER_URL}" \
+              "Bundle:" \
+              "${BASE_URL}/lab_c5-${FAP_VERSION}-bundle.zip"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
+
+  flipperlight_release:
+    name: Release FlipperLight FAP
+    needs: [changes, janos_fap]
+    if: needs.changes.outputs.flipper == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.flipperlight_tag }}
+          LIGHT_VERSION: ${{ needs.janos_fap.outputs.light_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="flipperlight-v${LIGHT_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download FAP artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: flipper-fap
+          path: release_artifacts/fap
+          merge-multiple: true
+
+      - name: Package FlipperLight bundle
+        env:
+          LIGHT_VERSION: ${{ needs.janos_fap.outputs.light_version }}
+          LIGHT_APPID: ${{ needs.janos_fap.outputs.light_appid }}
+        run: |
+          set -euo pipefail
+          cd release_artifacts/fap
+          shopt -s nullglob
+          files=("${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No FlipperLight FAPs found for ${LIGHT_APPID} ${LIGHT_VERSION}" >&2
+            exit 1
+          fi
+          zip -9 "flipperlight-${LIGHT_VERSION}-bundle.zip" "${files[@]}"
+
+      - name: Build release notes
+        env:
+          LIGHT_VERSION: ${{ needs.janos_fap.outputs.light_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          BASE_URL="https://github.com/$REPO/releases/download/${RELEASE_TAG}"
+          {
+            printf '%s\n\n' "Release ${RELEASE_TAG} published."
+            printf '%s\n' "Bundle: ${BASE_URL}/flipperlight-${LIGHT_VERSION}-bundle.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LIGHT_VERSION: ${{ needs.janos_fap.outputs.light_version }}
+          LIGHT_APPID: ${{ needs.janos_fap.outputs.light_appid }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="FlipperLight FAP ${LIGHT_VERSION}"
+          shopt -s nullglob
+          files=(
+            release_artifacts/fap/"${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap
+            "release_artifacts/fap/flipperlight-${LIGHT_VERSION}-bundle.zip"
+          )
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  flipperlight_discord:
+    name: Discord FlipperLight FAP
+    needs: [changes, janos_fap, flipperlight_release]
+    if: needs.changes.outputs.flipper == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          LIGHT_VERSION: ${{ needs.janos_fap.outputs.light_version }}
+          RELEASE_TAG: ${{ inputs.flipperlight_tag || format('flipperlight-v{0}', needs.janos_fap.outputs.light_version) }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          content=$(
+            printf '%s\n' \
+              "FlipperLight FAP" \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "Bundle:" \
+              "${BASE_URL}/flipperlight-${LIGHT_VERSION}-bundle.zip"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
 
   cardputer_build:
     name: Build Cardputer ${{ matrix.board }}
@@ -674,6 +899,48 @@ jobs:
             sleep $((attempt * 5))
           done
 
+  cardputer_discord:
+    name: Discord Cardputer
+    needs: [changes, cardputer_package, cardputer_release]
+    if: needs.changes.outputs.cardputer == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          FW_VERSION: ${{ needs.cardputer_package.outputs.fw_version }}
+          RELEASE_TAG: ${{ needs.cardputer_release.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+          PAGES_URL: ${{ format('https://{0}.github.io/{1}/cardputeradv/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          content=$(
+            printf '%s\n' \
+              "M5MonsterC5 Cardputer" \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "Web flasher:" \
+              "${PAGES_URL}" \
+              "ADV ZIP:" \
+              "${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}.zip" \
+              "K132 ZIP:" \
+              "${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}.zip" \
+              "ADV bundle:" \
+              "${BASE_URL}/M5MonsterC5-CardputerADV-adv-${FW_VERSION}-bundle.zip" \
+              "K132 bundle:" \
+              "${BASE_URL}/M5MonsterC5-CardputerADV-k132-${FW_VERSION}-bundle.zip"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
+
   tab5_firmware:
     name: Build Tab5
     needs: changes
@@ -855,12 +1122,49 @@ jobs:
             sleep $((attempt * 5))
           done
 
-  suite_release:
-    name: Release Suite
+  tab5_discord:
+    name: Discord Tab5
+    needs: [changes, tab5_firmware, tab5_release]
+    if: needs.changes.outputs.tab5 == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Notify Discord
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.GIT_BUILD }}
+          FW_VERSION: ${{ needs.tab5_firmware.outputs.fw_version }}
+          RELEASE_TAG: ${{ needs.tab5_release.outputs.release_tag }}
+          REPO: ${{ github.repository }}
+          PAGES_URL: ${{ format('https://{0}.github.io/{1}/tab5/', github.repository_owner, github.event.repository.name) }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DISCORD_WEBHOOK" ]; then
+            echo "DISCORD_WEBHOOK not configured, skipping notification"
+            exit 0
+          fi
+          TAG="${RELEASE_TAG}"
+          BASE_URL="https://github.com/$REPO/releases/download/$TAG"
+          RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
+          content=$(
+            printf '%s\n' \
+              "M5MonsterC5 Tab5" \
+              "Release ${TAG} published." \
+              "Release page:" \
+              "${RELEASE_PAGE}" \
+              "Web flasher:" \
+              "${PAGES_URL}" \
+              "Firmware ZIP:" \
+              "${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}.zip" \
+              "Bundle:" \
+              "${BASE_URL}/M5MonsterC5-Tab5-${FW_VERSION}-bundle.zip"
+          )
+          payload=$(jq -n --arg content "$content" '{content:$content}')
+          curl -X POST -H "Content-Type: application/json" -d "$payload" "$DISCORD_WEBHOOK"
+
+  pages:
+    name: Deploy Pages
     needs:
       - changes
       - janos_firmware
-      - janos_fap
       - janos_release
       - cardputer_package
       - cardputer_release
@@ -877,441 +1181,6 @@ jobs:
         needs.cardputer_release.result != 'failure' &&
         needs.tab5_firmware.result != 'failure' &&
         needs.tab5_release.result != 'failure'
-      }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    outputs:
-      release_tag: ${{ steps.suite_tag.outputs.tag }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-
-      - name: Resolve suite tag
-        id: suite_tag
-        env:
-          INPUT_TAG: ${{ inputs.suite_tag }}
-          RUN_NUMBER: ${{ github.run_number }}
-        run: |
-          set -euo pipefail
-          TAG="${INPUT_TAG:-}"
-          if [ -z "$TAG" ]; then
-            TAG="suite-$(date -u +%Y%m%d)-r${RUN_NUMBER}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Resolve component sources and tags
-        id: meta
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          C5_CHANGED: ${{ needs.changes.outputs.janos }}
-          C5_RELEASE_TAG: ${{ needs.janos_release.outputs.release_tag }}
-          C5_INPUT_TAG: ${{ inputs.janos_tag }}
-          S3_CHANGED: ${{ needs.changes.outputs.cardputer }}
-          S3_RELEASE_TAG: ${{ needs.cardputer_release.outputs.release_tag }}
-          S3_INPUT_TAG: ${{ inputs.cardputer_tag }}
-          P4_CHANGED: ${{ needs.changes.outputs.tab5 }}
-          P4_RELEASE_TAG: ${{ needs.tab5_release.outputs.release_tag }}
-          P4_INPUT_TAG: ${{ inputs.tab5_tag }}
-        run: |
-          set -euo pipefail
-          gh api "/repos/${GITHUB_REPOSITORY}/releases?per_page=100" > releases.json
-          python - <<'PY'
-          import fnmatch
-          import json
-          import os
-
-          with open("releases.json", encoding="utf-8") as fh:
-              releases = json.load(fh)
-
-          specs = {
-              "c5": {
-                  "changed": (os.getenv("C5_CHANGED") or "").strip() == "true",
-                  "release_tag": (os.getenv("C5_RELEASE_TAG") or "").strip(),
-                  "input_tag": (os.getenv("C5_INPUT_TAG") or "").strip(),
-                  "patterns": ["bootloader.bin", "partition-table.bin", "projectZero.bin"],
-              },
-              "s3": {
-                  "changed": (os.getenv("S3_CHANGED") or "").strip() == "true",
-                  "release_tag": (os.getenv("S3_RELEASE_TAG") or "").strip(),
-                  "input_tag": (os.getenv("S3_INPUT_TAG") or "").strip(),
-                  "patterns": [
-                      "bootloader-adv.bin",
-                      "partition-table-adv.bin",
-                      "M5MonsterC5-CardputerADV-adv.bin",
-                      "bootloader-k132.bin",
-                      "partition-table-k132.bin",
-                      "M5MonsterC5-CardputerADV-k132.bin",
-                  ],
-              },
-              "p4": {
-                  "changed": (os.getenv("P4_CHANGED") or "").strip() == "true",
-                  "release_tag": (os.getenv("P4_RELEASE_TAG") or "").strip(),
-                  "input_tag": (os.getenv("P4_INPUT_TAG") or "").strip(),
-                  "patterns": ["bootloader.bin", "partition-table.bin", "M5MonsterC5-Tab5.bin"],
-              },
-          }
-
-          def matches(release, patterns):
-              assets = [asset.get("name", "") for asset in release.get("assets", [])]
-              return all(any(fnmatch.fnmatch(asset_name, pattern) for asset_name in assets) for pattern in patterns)
-
-          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as out:
-              for key, spec in specs.items():
-                  if spec["changed"]:
-                      tag = spec["release_tag"] or spec["input_tag"]
-                      source = "artifact"
-                  else:
-                      tag = spec["input_tag"]
-                      if not tag:
-                          for release in releases:
-                              if release.get("draft"):
-                                  continue
-                              if matches(release, spec["patterns"]):
-                                  tag = release["tag_name"]
-                                  break
-                      source = "release"
-                  if not tag:
-                      raise SystemExit(f"Could not resolve tag for {key}")
-                  out.write(f"{key}_tag={tag}\n")
-                  out.write(f"{key}_source={source}\n")
-          PY
-
-      - name: Download JanOS artifacts from this run
-        if: steps.meta.outputs.c5_source == 'artifact'
-        uses: actions/download-artifact@v4
-        with:
-          name: esp32c5-firmware
-          path: incoming/janos
-
-      - name: Download JanOS artifacts from release
-        if: steps.meta.outputs.c5_source == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.meta.outputs.c5_tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p incoming/janos
-          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/janos \
-            --pattern "bootloader.bin" \
-            --pattern "partition-table.bin" \
-            --pattern "flash_board.py" \
-            --pattern "oui_wifi.bin" \
-            --pattern "projectZero.bin" \
-            --pattern "projectZero-*.bin" \
-            --pattern "projectZero-*.zip"
-
-      - name: Download Flipper artifacts from this run
-        if: steps.meta.outputs.c5_source == 'artifact'
-        uses: actions/download-artifact@v4
-        with:
-          name: flipper-fap
-          path: incoming/flipper
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Download Flipper artifacts from release
-        if: steps.meta.outputs.c5_source == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.meta.outputs.c5_tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p incoming/flipper
-          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/flipper \
-            --pattern "*.fap" \
-            --pattern "projectZero-faps-*.zip"
-
-      - name: Download Cardputer artifacts from this run
-        if: steps.meta.outputs.s3_source == 'artifact'
-        uses: actions/download-artifact@v4
-        with:
-          name: esp32s3-firmware
-          path: incoming/cardputer
-
-      - name: Download Cardputer artifacts from release
-        if: steps.meta.outputs.s3_source == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.meta.outputs.s3_tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p incoming/cardputer
-          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/cardputer \
-            --pattern "flash_board.py" \
-            --pattern "bootloader-adv.bin" \
-            --pattern "partition-table-adv.bin" \
-            --pattern "M5MonsterC5-CardputerADV-adv*.bin" \
-            --pattern "M5MonsterC5-CardputerADV-adv*.zip" \
-            --pattern "bootloader-k132.bin" \
-            --pattern "partition-table-k132.bin" \
-            --pattern "M5MonsterC5-CardputerADV-k132*.bin" \
-            --pattern "M5MonsterC5-CardputerADV-k132*.zip"
-
-      - name: Download Tab5 artifacts from this run
-        if: steps.meta.outputs.p4_source == 'artifact'
-        uses: actions/download-artifact@v4
-        with:
-          name: esp32p4-firmware
-          path: incoming/tab5
-
-      - name: Download Tab5 artifacts from release
-        if: steps.meta.outputs.p4_source == 'release'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ steps.meta.outputs.p4_tag }}
-        run: |
-          set -euo pipefail
-          mkdir -p incoming/tab5
-          gh release download "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --dir incoming/tab5 \
-            --pattern "bootloader.bin" \
-            --pattern "partition-table.bin" \
-            --pattern "flash_board.py" \
-            --pattern "M5MonsterC5-Tab5.bin" \
-            --pattern "M5MonsterC5-Tab5-*.bin" \
-            --pattern "M5MonsterC5-Tab5-*.zip"
-
-      - name: Prepare suite tree and manifest
-        env:
-          SUITE_TAG: ${{ steps.suite_tag.outputs.tag }}
-          REPO: ${{ github.repository }}
-          C5_TAG: ${{ steps.meta.outputs.c5_tag }}
-          C5_SOURCE: ${{ steps.meta.outputs.c5_source }}
-          S3_TAG: ${{ steps.meta.outputs.s3_tag }}
-          S3_SOURCE: ${{ steps.meta.outputs.s3_source }}
-          P4_TAG: ${{ steps.meta.outputs.p4_tag }}
-          P4_SOURCE: ${{ steps.meta.outputs.p4_source }}
-          JANOS_VERSION_HINT: ${{ needs.janos_firmware.outputs.fw_version }}
-          LABC5_VERSION_HINT: ${{ needs.janos_fap.outputs.fap_version }}
-          LIGHT_VERSION_HINT: ${{ needs.janos_fap.outputs.light_version }}
-          LIGHT_APPID_HINT: ${{ needs.janos_fap.outputs.light_appid }}
-          CARDPUTER_VERSION_HINT: ${{ needs.cardputer_package.outputs.fw_version }}
-          TAB5_VERSION_HINT: ${{ needs.tab5_firmware.outputs.fw_version }}
-        run: |
-          set -euo pipefail
-          python - <<'PY'
-          import json
-          import os
-          import re
-          import shutil
-          from pathlib import Path
-
-          suite_root = Path("suite_out")
-          if suite_root.exists():
-              shutil.rmtree(suite_root)
-
-          janos_dir = suite_root / "janos" / "firmware"
-          flipper_dir = suite_root / "flipper"
-          cardputer_adv_dir = suite_root / "cardputer" / "adv"
-          cardputer_k132_dir = suite_root / "cardputer" / "k132"
-          cardputer_bundle_dir = suite_root / "cardputer" / "bundles"
-          tab5_dir = suite_root / "tab5"
-
-          for path in (janos_dir, flipper_dir, cardputer_adv_dir, cardputer_k132_dir, cardputer_bundle_dir, tab5_dir):
-              path.mkdir(parents=True, exist_ok=True)
-
-          def copy_files(src_dir: Path, dst_dir: Path):
-              if not src_dir.exists():
-                  return
-              for item in sorted(src_dir.iterdir()):
-                  if item.is_file():
-                      shutil.copy2(item, dst_dir / item.name)
-
-          copy_files(Path("incoming/janos"), janos_dir)
-          copy_files(Path("incoming/flipper"), flipper_dir)
-          copy_files(Path("incoming/tab5"), tab5_dir)
-
-          cardputer_root = Path("incoming/cardputer")
-          if (cardputer_root / "adv").is_dir():
-              copy_files(cardputer_root / "adv", cardputer_adv_dir)
-              copy_files(cardputer_root / "k132", cardputer_k132_dir)
-              if (cardputer_root / "flash_board.py").is_file():
-                  shutil.copy2(cardputer_root / "flash_board.py", suite_root / "cardputer" / "flash_board.py")
-          else:
-              for item in sorted(cardputer_root.glob("*")):
-                  if not item.is_file():
-                      continue
-                  name = item.name
-                  if "adv" in name:
-                      target_dir = cardputer_bundle_dir if name.endswith("-bundle.zip") else cardputer_adv_dir
-                  elif "k132" in name:
-                      target_dir = cardputer_bundle_dir if name.endswith("-bundle.zip") else cardputer_k132_dir
-                  else:
-                      target_dir = suite_root / "cardputer"
-                  target_dir.mkdir(parents=True, exist_ok=True)
-                  shutil.copy2(item, target_dir / name)
-
-          def first_match(directory: Path, pattern: str, exclude=()):
-              for candidate in sorted(directory.glob(pattern)):
-                  if any(token in candidate.name for token in exclude):
-                      continue
-                  return candidate
-              return None
-
-          janos_version = (os.getenv("JANOS_VERSION_HINT") or "").strip()
-          if not janos_version:
-              candidate = first_match(janos_dir, "projectZero-*.bin", exclude=("projectZero.bin",))
-              if candidate:
-                  janos_version = candidate.name[len("projectZero-"):-len(".bin")]
-          if not janos_version:
-              janos_version = (os.getenv("C5_TAG") or "").strip()
-
-          lab_c5_version = (os.getenv("LABC5_VERSION_HINT") or "").strip()
-          if not lab_c5_version:
-              candidate = first_match(flipper_dir, "lab_c5_v*_*.fap")
-              if candidate:
-                  match = re.search(r"lab_c5_v([^_]+)_", candidate.name)
-                  if match:
-                      lab_c5_version = match.group(1)
-
-          light_version = (os.getenv("LIGHT_VERSION_HINT") or "").strip()
-          light_appid = (os.getenv("LIGHT_APPID_HINT") or "").strip() or "c5lab_dev"
-          if not light_version:
-              candidate = first_match(flipper_dir, f"{light_appid}_v*_*.fap")
-              if candidate:
-                  match = re.search(rf"{re.escape(light_appid)}_v([^_]+)_", candidate.name)
-                  if match:
-                      light_version = match.group(1)
-
-          cardputer_version = (os.getenv("CARDPUTER_VERSION_HINT") or "").strip()
-          if not cardputer_version:
-              candidate = first_match(cardputer_adv_dir, "M5MonsterC5-CardputerADV-adv-*.bin", exclude=("-full-", "-launcher-"))
-              if candidate:
-                  cardputer_version = candidate.name[len("M5MonsterC5-CardputerADV-adv-"):-len(".bin")]
-          if not cardputer_version:
-              cardputer_version = (os.getenv("S3_TAG") or "").strip()
-
-          tab5_version = (os.getenv("TAB5_VERSION_HINT") or "").strip()
-          if not tab5_version:
-              candidate = first_match(tab5_dir, "M5MonsterC5-Tab5-*.bin", exclude=("-full",))
-              if candidate and candidate.name != "M5MonsterC5-Tab5.bin":
-                  tab5_version = candidate.name[len("M5MonsterC5-Tab5-"):-len(".bin")]
-          if not tab5_version:
-              tab5_version = (os.getenv("P4_TAG") or "").strip()
-
-          manifest = {
-              "suite_tag": os.getenv("SUITE_TAG"),
-              "repository": os.getenv("REPO"),
-              "commit": os.getenv("GITHUB_SHA"),
-              "generated_at": os.getenv("GITHUB_RUN_ID"),
-              "pages_url": f"https://{os.getenv('GITHUB_REPOSITORY_OWNER')}.github.io/{os.getenv('GITHUB_REPOSITORY').split('/', 1)[1]}/",
-              "components": {
-                  "janos": {
-                      "release_tag": os.getenv("C5_TAG"),
-                      "source": os.getenv("C5_SOURCE"),
-                      "version": janos_version,
-                  },
-                  "flipper_lab_c5": {
-                      "version": lab_c5_version,
-                      "files": sorted(path.name for path in flipper_dir.glob("lab_c5*.fap")),
-                  },
-                  "flipperlight": {
-                      "appid": light_appid,
-                      "version": light_version,
-                      "files": sorted(path.name for path in flipper_dir.glob(f"{light_appid}*.fap")),
-                  },
-                  "cardputer": {
-                      "release_tag": os.getenv("S3_TAG"),
-                      "source": os.getenv("S3_SOURCE"),
-                      "version": cardputer_version,
-                      "boards": ["adv", "k132"],
-                  },
-                  "tab5": {
-                      "release_tag": os.getenv("P4_TAG"),
-                      "source": os.getenv("P4_SOURCE"),
-                      "version": tab5_version,
-                  },
-              },
-          }
-
-          (suite_root / "release-manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-          PY
-
-      - name: Build suite assets
-        env:
-          SUITE_TAG: ${{ steps.suite_tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          cd suite_out
-          find . -type f ! -name 'SHA256SUMS' -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
-          zip -9 -r "../projectZero-${SUITE_TAG}.zip" .
-
-      - name: Build suite release notes
-        env:
-          SUITE_TAG: ${{ steps.suite_tag.outputs.tag }}
-          REPO: ${{ github.repository }}
-          C5_TAG: ${{ steps.meta.outputs.c5_tag }}
-          S3_TAG: ${{ steps.meta.outputs.s3_tag }}
-          P4_TAG: ${{ steps.meta.outputs.p4_tag }}
-          JANOS_VERSION: ${{ needs.janos_firmware.outputs.fw_version }}
-          LABC5_VERSION: ${{ needs.janos_fap.outputs.fap_version }}
-          LIGHT_VERSION: ${{ needs.janos_fap.outputs.light_version }}
-          CARDPUTER_VERSION: ${{ needs.cardputer_package.outputs.fw_version }}
-          TAB5_VERSION: ${{ needs.tab5_firmware.outputs.fw_version }}
-        run: |
-          set -euo pipefail
-          BASE_URL="https://github.com/$REPO/releases/download/${SUITE_TAG}"
-          {
-            printf '%s\n\n' "Release ${SUITE_TAG} published."
-            printf '%s\n' "Web flasher: https://${REPO%/*}.github.io/${REPO#*/}/"
-            printf '%s\n' "JanOS: ${C5_TAG} (${JANOS_VERSION:-resolved from manifest})"
-            printf '%s\n' "Lab_C5 FAP: ${LABC5_VERSION:-resolved from manifest}"
-            printf '%s\n' "FlipperLight FAP: ${LIGHT_VERSION:-resolved from manifest}"
-            printf '%s\n' "Cardputer: ${S3_TAG} (${CARDPUTER_VERSION:-resolved from manifest})"
-            printf '%s\n' "Tab5: ${P4_TAG} (${TAB5_VERSION:-resolved from manifest})"
-            printf '%s\n\n' "Bundle ZIP: ${BASE_URL}/projectZero-${SUITE_TAG}.zip"
-            printf '%s\n' "Manifest: ${BASE_URL}/release-manifest.json"
-            printf '%s\n' "Checksums: ${BASE_URL}/SHA256SUMS"
-          } > suite_release_notes.md
-
-      - name: Create or update suite release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          SUITE_TAG: ${{ steps.suite_tag.outputs.tag }}
-        run: |
-          set -euo pipefail
-          NAME="projectZero Suite ${SUITE_TAG}"
-          if gh release view "$SUITE_TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release edit "$SUITE_TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file suite_release_notes.md
-          else
-            gh release create "$SUITE_TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file suite_release_notes.md
-          fi
-          for attempt in 1 2 3 4 5; do
-            if gh release upload "$SUITE_TAG" -R "$GITHUB_REPOSITORY" --clobber \
-              "projectZero-${SUITE_TAG}.zip" \
-              suite_out/release-manifest.json \
-              suite_out/SHA256SUMS; then
-              exit 0
-            fi
-            if [ "$attempt" -eq 5 ]; then
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-
-  pages:
-    name: Deploy Pages
-    needs:
-      - changes
-      - janos_firmware
-      - janos_release
-      - cardputer_package
-      - cardputer_release
-      - tab5_firmware
-      - tab5_release
-      - suite_release
-    if: >-
-      ${{
-        always() &&
-        !cancelled() &&
-        needs.changes.result == 'success' &&
-        needs.janos_firmware.result != 'failure' &&
-        needs.janos_release.result != 'failure' &&
-        needs.cardputer_package.result != 'failure' &&
-        needs.cardputer_release.result != 'failure' &&
-        needs.tab5_firmware.result != 'failure' &&
-        needs.tab5_release.result != 'failure' &&
-        needs.suite_release.result != 'failure'
       }}
     runs-on: ubuntu-24.04
     permissions:

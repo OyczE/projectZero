@@ -6,6 +6,12 @@ on:
       release_tag:
         description: "Optional tag name to upload assets to a release (example 'janos-v1.2.3')"
         required: false
+      labc5_tag:
+        description: "Optional tag name for Lab_C5 FAP release (example 'labc5-v1.6.0')"
+        required: false
+      flipperlight_tag:
+        description: "Optional tag name for FlipperLight FAP release (example 'flipperlight-v0.0.1')"
+        required: false
 
 defaults:
   run:
@@ -85,11 +91,12 @@ jobs:
           if-no-files-found: error
 
   fap:
-    name: Flipper FAP
-    needs: firmware
+    name: Flipper Apps
     runs-on: ubuntu-24.04
     outputs:
       fap_version: ${{ steps.fap_version.outputs.fap_version }}
+      light_version: ${{ steps.light_version.outputs.light_version }}
+      light_appid: ${{ steps.light_version.outputs.light_appid }}
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -148,6 +155,28 @@ jobs:
             fh.write(f"fap_version={version}\n")
           PY
 
+      - name: Read FlipperLight version
+        id: light_version
+        run: |
+          set -e
+          python - <<'PY'
+          from pathlib import Path
+          import os
+          import re
+
+          text = Path("FlipperLight/application.fam").read_text(encoding="utf-8", errors="ignore")
+          appid = re.search(r'appid="([^"]+)"', text)
+          version = re.search(r'fap_version="([^"]+)"', text)
+          if not appid:
+            raise SystemExit("FlipperLight appid not found")
+          if not version:
+            raise SystemExit("FlipperLight fap_version not found")
+
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as fh:
+            fh.write(f"light_appid={appid.group(1)}\n")
+            fh.write(f"light_version={version.group(1)}\n")
+          PY
+
       - name: Upload FAP artifacts
         if: ${{ hashFiles('FLIPPER/dist/*.fap', 'FlipperLight/dist/*.fap') != '' }}
         uses: actions/upload-artifact@v6
@@ -158,8 +187,8 @@ jobs:
             FlipperLight/dist/*.fap
 
   release:
-    name: Release
-    needs: [firmware, fap]
+    name: Release JanOS
+    needs: [firmware]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -172,59 +201,10 @@ jobs:
           name: esp32c5-firmware
           path: release_artifacts/firmware
 
-      - name: Download FAP artifacts (if present)
-        uses: actions/download-artifact@v6
-        with:
-          name: flipper-fap
-          path: release_artifacts/fap
-          merge-multiple: true
-        continue-on-error: true
-
-      - name: Package FAP zip
-        if: ${{ hashFiles('release_artifacts/fap/*.fap') != '' }}
-        run: |
-          set -e
-          cd release_artifacts/fap
-          zip -9 "projectZero-faps-${{ needs.fap.outputs.fap_version }}.zip" *.fap
-
-      - name: Package full bundle (JanOS + FAPs)
-        run: |
-          set -e
-          cd release_artifacts
-          mkdir -p bundle
-          FW_VERSION="${{ needs.firmware.outputs.fw_version }}"
-          FAP_VERSION="${{ needs.fap.outputs.fap_version }}"
-
-          shopt -s nullglob
-          faps=(fap/*.fap)
-
-          files=(
-            firmware/bootloader.bin
-            firmware/partition-table.bin
-            firmware/flash_board.py
-            firmware/oui_wifi.bin
-            firmware/projectZero.bin
-            "firmware/projectZero-${FW_VERSION}.bin"
-          )
-
-          # Include existing JanOS zip if present
-          if [ -f "firmware/projectZero-${FW_VERSION}.zip" ]; then
-            files+=("firmware/projectZero-${FW_VERSION}.zip")
-          fi
-
-          # Add all FAPs (if any)
-          if [ ${#faps[@]} -gt 0 ]; then
-            files+=("${faps[@]}")
-          fi
-
-          out="bundle/projectZero-${FW_VERSION}-with-fap-${FAP_VERSION:-unknown}.zip"
-          zip -9 "$out" "${files[@]}"
-
       - name: Build release notes
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
-          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
           REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('janos-v{0}', needs.firmware.outputs.fw_version) }}
         run: |
@@ -232,11 +212,8 @@ jobs:
           notes_file="release_notes.md"
           TAG="$(printf '%s' "${RELEASE_TAG:-janos-v${FW_VERSION}}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
           if [ -z "$TAG" ]; then TAG="janos-v${FW_VERSION}"; fi
-          FAP_VER="${FAP_VERSION:-unknown}"
           BASE_URL="https://github.com/$REPO/releases/download/$TAG"
           JANOS_ZIP="$BASE_URL/projectZero-${FW_VERSION}.zip"
-          FAP_ZIP="$BASE_URL/projectZero-faps-${FAP_VER}.zip"
-          BUNDLE_ZIP="$BASE_URL/projectZero-${FW_VERSION}-with-fap-${FAP_VER}.zip"
           RELEASE_PAGE="https://github.com/$REPO/releases/tag/$TAG"
           PAGES_LINK="https://${REPO%/*}.github.io/${REPO#*/}/"
 
@@ -245,8 +222,6 @@ jobs:
             printf '%s\n' "Release page: ${RELEASE_PAGE}"
             printf '%s\n' "Web flasher: ${PAGES_LINK}"
             printf '%s\n' "JanOS (${FW_VERSION}): ${JANOS_ZIP}"
-            printf '%s\n' "FAP bundle (${FAP_VER}): ${FAP_ZIP}"
-            printf '%s\n\n' "Full package: ${BUNDLE_ZIP}"
           } > "$notes_file"
 
           if [ "${GITHUB_EVENT_NAME:-}" = "release" ]; then
@@ -286,7 +261,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           FW_VERSION: ${{ needs.firmware.outputs.fw_version }}
-          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
           RELEASE_TAG: ${{ github.event.release.tag_name || inputs.release_tag || format('janos-v{0}', needs.firmware.outputs.fw_version) }}
         run: |
           set -euo pipefail
@@ -306,25 +280,177 @@ jobs:
             "release_artifacts/firmware/projectZero-${FW_VERSION}.zip"
           )
 
-          shopt -s nullglob
-          optional=(
-            "release_artifacts/fap/projectZero-faps-${FAP_VERSION}.zip"
-            release_artifacts/bundle/projectZero-*-with-fap-*.zip
-            release_artifacts/fap/*.fap
-          )
-
-          for file in "${optional[@]}"; do
-            if [ -e "$file" ]; then
-              files+=("$file")
-            fi
-          done
-
           if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
           else
             gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
           fi
 
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  labc5_release:
+    name: Release Lab_C5 FAP
+    needs: [fap]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.labc5_tag }}
+          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="labc5-v${FAP_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download FAP artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: flipper-fap
+          path: release_artifacts/fap
+          merge-multiple: true
+
+      - name: Package Lab_C5 bundle
+        env:
+          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
+        run: |
+          set -euo pipefail
+          cd release_artifacts/fap
+          shopt -s nullglob
+          files=(lab_c5_v"${FAP_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No Lab_C5 FAPs found for version ${FAP_VERSION}" >&2
+            exit 1
+          fi
+          zip -9 "lab_c5-${FAP_VERSION}-bundle.zip" "${files[@]}"
+
+      - name: Build release notes
+        env:
+          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          BASE_URL="https://github.com/$REPO/releases/download/${RELEASE_TAG}"
+          {
+            printf '%s\n\n' "Release ${RELEASE_TAG} published."
+            printf '%s\n' "Uploader: https://${REPO%/*}.github.io/${REPO#*/}/flipper_fap.html"
+            printf '%s\n' "Bundle: ${BASE_URL}/lab_c5-${FAP_VERSION}-bundle.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          FAP_VERSION: ${{ needs.fap.outputs.fap_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="Lab_C5 FAP ${FAP_VERSION}"
+          shopt -s nullglob
+          files=(
+            release_artifacts/fap/lab_c5_v"${FAP_VERSION}"_*.fap
+            "release_artifacts/fap/lab_c5-${FAP_VERSION}-bundle.zip"
+          )
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 5 ]; then
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+
+  flipperlight_release:
+    name: Release FlipperLight FAP
+    needs: [fap]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Resolve release tag
+        id: meta
+        env:
+          INPUT_TAG: ${{ inputs.flipperlight_tag }}
+          LIGHT_VERSION: ${{ needs.fap.outputs.light_version }}
+        run: |
+          set -euo pipefail
+          TAG="${INPUT_TAG:-}"
+          if [ -z "$TAG" ]; then TAG="flipperlight-v${LIGHT_VERSION}"; fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Download FAP artifacts
+        uses: actions/download-artifact@v6
+        with:
+          name: flipper-fap
+          path: release_artifacts/fap
+          merge-multiple: true
+
+      - name: Package FlipperLight bundle
+        env:
+          LIGHT_VERSION: ${{ needs.fap.outputs.light_version }}
+          LIGHT_APPID: ${{ needs.fap.outputs.light_appid }}
+        run: |
+          set -euo pipefail
+          cd release_artifacts/fap
+          shopt -s nullglob
+          files=("${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "No FlipperLight FAPs found for ${LIGHT_APPID} ${LIGHT_VERSION}" >&2
+            exit 1
+          fi
+          zip -9 "flipperlight-${LIGHT_VERSION}-bundle.zip" "${files[@]}"
+
+      - name: Build release notes
+        env:
+          LIGHT_VERSION: ${{ needs.fap.outputs.light_version }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          BASE_URL="https://github.com/$REPO/releases/download/${RELEASE_TAG}"
+          {
+            printf '%s\n\n' "Release ${RELEASE_TAG} published."
+            printf '%s\n' "Bundle: ${BASE_URL}/flipperlight-${LIGHT_VERSION}-bundle.zip"
+          } > release_notes.md
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LIGHT_VERSION: ${{ needs.fap.outputs.light_version }}
+          LIGHT_APPID: ${{ needs.fap.outputs.light_appid }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          TAG="${RELEASE_TAG}"
+          NAME="FlipperLight FAP ${LIGHT_VERSION}"
+          shopt -s nullglob
+          files=(
+            release_artifacts/fap/"${LIGHT_APPID}"_v"${LIGHT_VERSION}"_*.fap
+            "release_artifacts/fap/flipperlight-${LIGHT_VERSION}-bundle.zip"
+          )
+          if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$TAG" -R "$GITHUB_REPOSITORY" --title "$NAME" --notes-file release_notes.md
+          else
+            gh release create "$TAG" -R "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "$NAME" --notes-file release_notes.md
+          fi
           for attempt in 1 2 3 4 5; do
             if gh release upload "$TAG" -R "$GITHUB_REPOSITORY" --clobber "${files[@]}"; then
               exit 0
